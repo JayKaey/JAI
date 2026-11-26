@@ -230,12 +230,16 @@ const MISHEARD_SAFE_TOOLS: &[&str] = &[
     "configure_interface", "control_jai_interface", "hud_board", "open_jai_view", "control_orb_mode", "media_and_volume_control", "control_music", "set_listening_mode",
 ];
 
+/// Verbs an order starts with, as said of him ("opens") and as told ("open").
+const VERBS: &[(&str, &str)] = &[
+    ("opens", "open"), ("closes", "close"), ("shows", "show"), ("hides", "hide"), ("changes", "change"), ("makes", "make"), ("turns", "turn"),
+    ("switches", "switch"), ("sets", "set"), ("puts", "put"), ("brings", "bring"), ("plays", "play"), ("pauses", "pause"), ("mutes", "mute"),
+    ("dims", "dim"), ("starts", "start"), ("launches", "launch"), ("stops", "stop"), ("locks", "lock"), ("runs", "run"), ("tells", "tell"),
+    ("reads", "read"), ("says", "say"), ("moves", "move"), ("sends", "send"), ("minimizes", "minimize"), ("maximizes", "maximize"),
+];
+
 /// A third-person verb at the start made imperative ("opens your settings" → "open …").
 fn third_person_to_imperative(clause: &str) -> String {
-    const VERBS: &[(&str, &str)] = &[
-        ("opens", "open"), ("closes", "close"), ("shows", "show"), ("hides", "hide"), ("changes", "change"), ("makes", "make"), ("turns", "turn"),
-        ("switches", "switch"), ("sets", "set"), ("puts", "put"), ("brings", "bring"), ("plays", "play"), ("pauses", "pause"), ("mutes", "mute"),
-    ];
     let mut words = clause.split_whitespace();
     let Some(first) = words.next() else { return String::new() };
     let lower = first.to_lowercase();
@@ -281,19 +285,31 @@ pub fn is_screen_question(text: &str) -> bool {
     (screen && asks) || seeing
 }
 
-/// "Switch to hands-free mode", "Freisprechmodus aktivieren", "only listen when I say JAI":
-/// `set_listening_mode` arguments.
+/// "Switch to hands-free mode", "Freisprechmodus aktivieren", "only listen when I say JAI",
+/// "only answer when I say your name", "please listen if you are talked to": `set_listening_mode`
+/// arguments (Sir, 2026-11-26: he says how JAI is to listen).
 pub fn listening_mode_command(text: &str) -> Option<Value> {
+    // His name, anywhere in the sentence, and nothing else ("only answer when I say your name").
+    static BY_NAME: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(?:only|nur)\b.*\b(?:say|says|said|mention|use|call|hear|sage|sagst|sag|nenne|höre)\s+(?:your\s+name|jai|deinen\s+namen)\b|\bnur\b.*\b(?:deinen\s+namen|jai)\s+(?:sage|sag|sagst|nenne|höre)\b|\b(?:only|nur)\b.*\b(?:with|mit)\s+(?:your\s+name|deinem\s+namen)\b").expect("by name")
+    });
+    // When he is spoken to: his name, an open conversation, his window, a clear order for him.
+    static SPOKEN_TO: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(?:when|if|whenever)\s+(?:you\s+think\s+)?(?:you\s+are|you\s+re|i\s+am|i\s+m|someone\s+is|somebody\s+is|anyone\s+is|people\s+are|someone|somebody|anyone|people|i)\s+(?:talk|talks|talking|talked|speak|speaks|speaking|spoken|addressed)\s+(?:to|with)\b|\bwhen\s+(?:spoken\s+to|addressed)\b|\bwenn\s+(?:man|ich|jemand)\s+(?:mit\s+dir\s+(?:redet|rede|spricht|spreche)|dich\s+(?:anspricht|anspreche))\b|\bwenn\s+du\s+angesprochen\s+wirst\b").expect("spoken to")
+    });
     // (His name as Sir says it, where it is the sentence's object: "... when I say Jay".)
     let s = raw_words(text).split_whitespace().map(|w| if w == "jay" { "jai" } else { w }).collect::<Vec<_>>().join(" ");
     let hands_free = ["hands free mode", "handsfree mode", "hands free", "handsfree", "freisprechmodus", "freisprech modus", "listen to everything", "always listen", "hör immer zu", "immer zuhören"];
     let wake = ["wake word mode", "wakeword mode", "wake word", "only listen when i say jai", "only when i say jai", "only respond when i say jai", "only listen to jai", "aktivierungswort", "nur wenn ich jai sage", "weckwort"];
-    let switching = ["switch", "turn on", "activate", "enable", "go", "use", "set", "change", "aktivier", "aktiviere", "schalte", "schalt", "wechsel", "wechsle", "only", "nur", "mode", "modus", "listen", "zuhören", "hör"];
+    let switching = ["switch", "turn on", "activate", "enable", "go", "use", "set", "change", "aktivier", "aktiviere", "schalte", "schalt", "wechsel", "wechsle", "only", "nur", "mode", "modus", "listen", "zuhören", "hör", "answer", "respond", "react", "antworte", "reagier"];
     if !switching.iter().any(|w| s.contains(w)) {
         return None;
     }
-    if wake.iter().any(|p| s.contains(p)) {
+    if wake.iter().any(|p| s.contains(p)) || BY_NAME.is_match(&s) {
         return Some(json!({ "mode": "wake_word" }));
+    }
+    if SPOKEN_TO.is_match(&s) {
+        return Some(json!({ "mode": "when_spoken_to" }));
     }
     if hands_free.iter().any(|p| s.contains(p)) {
         return Some(json!({ "mode": "hands_free" }));
@@ -3350,6 +3366,11 @@ static HUD_CONSOLE: LazyLock<Regex> = LazyLock::new(|| {
 static HUD_CORE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(show|open|display|bring up|pull up|bring back|close|hide|exit|leave|collapse|minimi[sz]e)\s+(?:me\s+)?(?:(?:your|the|my|ur)\s+)?core(?:\s+(?:view|architecture|sphere))?(?:\s+again)?$|^(core)\s+view$|^(zeig|zeige|öffne|oeffne|schließ|schließe|schliess|schliesse|versteck|verstecke)\s+(?:mir\s+)?(?:deinen|den|dein)\s+(?:kern|core)$")
 });
+/// "Show me the simpler version of your core", "show your core as dots", "zeig deinen Kern als
+/// Netz": which version of him the core view shows (`holo_mind::CoreKind`).
+static HUD_CORE_KIND: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"\b(simpler|simple|real|full|normal|complex)\s+(?:version|one)\s+of\s+(?:your|the|ur)\s+core\b|\bcore\s+as\s+(?:a\s+|an\s+)?(dots|files|network|graph|nodes|rings|circuitry|mind|sphere)\b|\b(?:your|ur)\s+(files|dateien)\s+as\s+(?:dots|a\s+network|a\s+graph|punkte|netz)\b|\b(einfache\w*|echte\w*)\s+version\s+(?:deines|des)\s+kern\w*|\bkern\w*\s+als\s+(punkte|netz|netzwerk|dateien|ringe)\b")
+});
 /// "Bring back the screen", "restore the screen", "screen back on": the last board comes back.
 static BOARD_RESTORE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:go\s+)?back\s+to\s+(?:the\s+)?(?:board|hud board|screen)$|^(?:bring|put|get)\s+(?:back\s+)?(?:the|my|your)\s+(?:screen|board|hud board|blocks|report)\s*(?:back)?(?:\s+(?:up|on))?$|^(?:bring|get)\s+back\s+(?:the|my|your)\s+(?:screen|board|hud board|blocks)$|^(?:restore|reopen)\s+(?:the|my|your)\s+(?:screen|blocks|last board|hud board)$|^(?:screen|board)\s+(?:back(?:\s+(?:on|up))?|up)$|^(?:turn|switch)\s+(?:the\s+)?screen\s+back\s+on$|^(?:hol|bring)\s+(?:den\s+)?(?:bildschirm|screen)\s+zurück$")
@@ -3587,6 +3608,10 @@ fn interface_command(s: &str) -> Option<Value> {
         let close = ["close", "hide", "shut", "schließ", "schliess"].iter().any(|v| verb.starts_with(v));
         return Some(json!({ "text_console": !close }));
     }
+    // "Show me the simpler version of your core": his files as points (Sir, 2026-11-26).
+    if let Some(kind) = HUD_CORE_KIND.captures(s).and_then(|c| c.iter().skip(1).flatten().next()).and_then(|w| crate::holo_mind::CoreKind::of_word(w.as_str())) {
+        return Some(json!({ "core_kind": kind.name() }));
+    }
     // "Show me your core": the 3D module sphere.
     if let Some(c) = HUD_CORE.captures(s) {
         let verb = capture(&c)?;
@@ -3726,7 +3751,7 @@ static FOCUS_REMOVE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:remove|dismiss|hide|get rid of|take away)\s+(?:it|that|this|that one|this one)$|^take\s+(?:it|that|this)\s+away$|^(?:entferne|entfern|nimm)\s+(?:es|das)(?:\s+weg)?$|^(?:mach|mache)\s+(?:es|das)\s+weg$|^weg\s+damit$")
 });
 static FOCUS_CLOSE_TAB: LazyLock<Regex> =
-    LazyLock::new(|| re(r"^(?:close|shut)\s+(?:the|that|this)\s+tab$|^(?:schließ|schließe|schliess|schliesse)\s+(?:den|diesen)\s+tab$|^tab\s+(?:schließen|schliessen|zu)$"));
+    LazyLock::new(|| re(r"^(?:close|shut)\s+(?:(?:the|that|this|my|current|active|open|opened)\s+)+(?P<app>(?:web\s+)?browser|chrome|firefox|edge|brave|opera)?\s*tab(?:\s+(?:in|of|on)\s+(?:my|the)\s+(?P<in>browser|chrome|firefox|edge|brave|opera))?$|^(?:schließ|schließe|schliess|schliesse)\s+(?:(?:den|diesen|meinen|aktuellen|offenen)\s+)+(?P<de>browser)?[\s-]?tab(?:\s+im\s+(?P<im>browser))?$|^tab\s+(?:schließen|schliessen|zu)$"));
 
 /// Sir explicitly means JAI's own window ("maximize JAI", "fullscreen yourself", "make the
 /// HUD full screen"). Checked on the raw sentence: normalisation drops a trailing "JAI".
@@ -3789,8 +3814,13 @@ fn focus_command(s: &str) -> Option<Intent> {
     if FOCUS_FRONT.is_match(s) {
         return window("focus");
     }
-    if FOCUS_CLOSE_TAB.is_match(s) {
-        return window("close_tab");
+    // "Close my current browser tab": the browser's tab, wherever the browser stands (Sir,
+    // 2026-11-26); "close the tab": the one in front.
+    if let Some(c) = FOCUS_CLOSE_TAB.captures(s) {
+        return match ["app", "in", "de", "im"].iter().find_map(|n| c.name(n)) {
+            Some(app) => tool("window_management", json!({ "action": "close_tab", "target_window": app.as_str().to_lowercase().trim_start_matches("web ") })),
+            None => window("close_tab"),
+        };
     }
     if FOCUS_CLOSE.is_match(s) {
         return tool("close_application", json!({ "app_name": "it", "force": true }));
@@ -3836,6 +3866,11 @@ static RECENT_ACTIONS: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 // "What's new?": what this build does that the last one did not.
+/// "Which version are you on?", "what's your version", "welche Version hast du" (a friend
+/// checking his JAI is the newest).
+static VERSION_ASK: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:which|what)\s+version(?:\s+of(?:\s+(?:jai|you))?)?\s+(?:are\s+you(?:\s+on|\s+running)?|is\s+(?:this|that|running|installed)|do\s+you\s+(?:have|run)|am\s+i\s+(?:on|running))|(?:whats\s+|what\s+is\s+)?your\s+version(?:\s+number)?|(?:which|what)\s+version|welche\s+version\s+(?:bist\s+du|hast\s+du|ist\s+das|läuft)|(?:was\s+ist\s+)?deine\s+version(?:snummer)?)$")
+});
 static WHATS_NEW: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:whats|what\s+is)\s+new(?:\s+(?:with\s+you|in\s+this\s+(?:version|build|update)|since\s+the\s+last\s+(?:version|build|update)))?$|^(?:any|got\s+any|do\s+you\s+have\s+any)\s+new\s+(?:features|tricks)$|^what\s+are\s+your\s+new\s+features$|^was\s+ist\s+neu$|^was\s+gibt(?:\s+es|s)\s+neues$|^was\s+kannst\s+du\s+neues$")
 });
@@ -4565,11 +4600,93 @@ static CAPTURE_WORKSPACE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:save|store|capture|remember|record|snapshot|speicher|speichere|sichere)\s+(?:my\s+|the\s+|this\s+|meinen\s+|mein\s+|das\s+|dieses\s+|diesen\s+|den\s+)?(?:current\s+|whole\s+|aktuelle[ns]?\s+)?(?:setup|workspace|layout|desktop|arrangement|window layout|screen layout|windows|arbeitsplatz|arbeitsbereich|anordnung|fensterlayout)\s+(?:as|als|under|unter)\s+(?:the\s+|a\s+|my\s+)?(.+?)$")
 });
 
-/// "Save my current setup as Gaming Protocol" → capture the workspace.
+// Protocols changed by his word (Sir, 2026-11-26: "he should be able to delete, create and edit
+// his protocols if I tell him to"). Each names the protocol at its end, "… protocol".
+static PROTOCOL_STEP_OUT: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:remove|delete|take|drop|nimm|entferne?|lösche?|loesche?|streiche?)\s+(.+?)\s+(?:from|out of|off|aus)\s+(?:the\s+|my\s+|your\s+|dem\s+|meinem\s+|deinem\s+)?(.+?)[\s-]+(?:protocol|protokoll)(?:\s+raus|\s+heraus)?$")
+});
+static PROTOCOL_STEP_IN: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:add|put|append|include|füge?|fuege?|packe?)\s+(.+?)\s+(?:to|into|in|onto|zu|zum|zur|ins)\s+(?:the\s+|my\s+|your\s+|dem\s+|das\s+|meinem\s+|mein\s+|deinem\s+|dein\s+)?(.+?)[\s-]+(?:protocol|protokoll)(?:\s+hinzu|\s+mit auf|\s+auf)?$")
+});
+static PROTOCOL_NEW_STEP: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:add|put)\s+(?:a\s+|another\s+|one more\s+)?step\s+(?:to|in|into)\s+(?:the\s+|my\s+|your\s+)?(.+?)[\s-]+protocol\s+(?:that|which|to)\s+(.+)$")
+});
+static PROTOCOL_RENAME: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:rename|change the name of)\s+(?:the\s+|my\s+|your\s+)?(.+?)[\s-]+protocol\s+(?:to|into|as)\s+(?:the\s+|a\s+)?(.+?)(?:[\s-]+protocol)?$|^benenne?\s+(?:das\s+|mein\s+|dein\s+)?(.+?)[\s-]+protokoll\s+(?:in|zu)\s+(?:das\s+)?(.+?)(?:[\s-]+protokoll)?\s+um$")
+});
+static PROTOCOL_DESCRIBE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:what\s+(?:does|do|will)\s+(?:the\s+|my\s+|your\s+)?(.+?)[\s-]+protocol\s+do|what(?:s|\s+is|\s+are)\s+(?:in|the steps of|the steps in)\s+(?:the\s+|my\s+|your\s+)?(.+?)[\s-]+protocol|(?:describe|tell me about|read me)\s+(?:the\s+|my\s+|your\s+)?(.+?)[\s-]+protocol|was\s+(?:macht|tut)\s+(?:das\s+|mein\s+|dein\s+)?(.+?)[\s-]+protokoll(?:\s+eigentlich|\s+genau)?|was\s+ist\s+(?:im|in dem|in meinem)\s+(.+?)[\s-]+protokoll)$")
+});
+static PROTOCOL_EDIT: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:edit|change|modify|show me|bearbeite?|ändere?|aendere?)\s+(?:the\s+|my\s+|your\s+|das\s+|mein\s+|dein\s+)?(.+?)[\s-]+(?:protocol|protokoll)$")
+});
+static PROTOCOL_DELETE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:delete|remove|erase|scrap|forget|get rid of|lösche?|loesche?|entferne?|vergiss)\s+(?:the\s+|my\s+|your\s+|das\s+|mein\s+|dein\s+)?(.+?)[\s-]+(?:protocol|protokoll)$")
+});
+static PROTOCOL_CREATE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:create|make|build|set up|write|erstelle?|mache?|baue?|lege?)\s+(?:me\s+|mir\s+)?(?:a\s+|an\s+|ein\s+|einen\s+)?(?:new\s+|neues\s+|neuen\s+)?(?:(?:protocol|protokoll)\s+(?:called|named|namens|mit dem namen)\s+(.+?)|(.+?)[\s-]+(?:protocol|protokoll))(?:\s+(?:that|which|to|where you|with the steps|mit den schritten)\s+(.+?))?(?:\s+an)?$")
+});
+
+/// "opens netflix and dims the screens then plays my focus playlist" → each step as an order.
+/// ("and" parts only where an order starts: "dim the lights and the screens" is one.)
+fn protocol_steps(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for step in crate::macros::split_steps(text) {
+        for (k, piece) in step.split(" and ").enumerate() {
+            let piece = third_person_to_imperative(piece.trim());
+            let an_order = piece.split_whitespace().next().is_some_and(|w| VERBS.iter().any(|(_, base)| *base == w));
+            match out.last_mut() {
+                Some(last) if k > 0 && !an_order => *last = format!("{last} and {piece}"),
+                _ => out.push(piece),
+            }
+        }
+    }
+    out
+}
+
+/// Protocols by his word: "save my current setup as Gaming Protocol" (the workspace), "create a
+/// protocol called movie night that opens Netflix and dims the screens", "add play my rock
+/// playlist to the gaming protocol", "take Discord out of the gaming protocol", "rename the
+/// gaming protocol to focus", "what does the gaming protocol do", "edit the gaming protocol",
+/// "delete the gaming protocol".
 fn protocol_command(s: &str) -> Option<Intent> {
-    let c = CAPTURE_WORKSPACE.captures(s)?;
-    let name = c[1].trim().trim_end_matches(" protocol").trim_end_matches(" protokoll").trim().to_string();
-    (!name.is_empty()).then(|| Intent::Tool { name: "manage_stark_protocol", args: json!({ "action": "capture_current_workspace", "protocol_name": name }) })
+    let protocol = |args: Value| Some(Intent::Tool { name: "manage_stark_protocol", args });
+    let name = |m: &str| m.trim().trim_end_matches(" protocol").trim_end_matches(" protokoll").trim().to_string();
+    if let Some(c) = CAPTURE_WORKSPACE.captures(s) {
+        let name = name(&c[1]);
+        return (!name.is_empty()).then(|| Intent::Tool { name: "manage_stark_protocol", args: json!({ "action": "capture_current_workspace", "protocol_name": name }) });
+    }
+    if let Some(c) = PROTOCOL_STEP_OUT.captures(s) {
+        return protocol(json!({ "action": "remove_step", "protocol_name": name(&c[2]), "step": c[1].trim() }));
+    }
+    if let Some(c) = PROTOCOL_STEP_IN.captures(s) {
+        return protocol(json!({ "action": "add_step", "protocol_name": name(&c[2]), "step": c[1].trim() }));
+    }
+    if let Some(c) = PROTOCOL_NEW_STEP.captures(s) {
+        return protocol(json!({ "action": "add_step", "protocol_name": name(&c[1]), "step": third_person_to_imperative(c[2].trim()) }));
+    }
+    if let Some(c) = PROTOCOL_RENAME.captures(s) {
+        let mut said = c.iter().skip(1).flatten().map(|m| name(m.as_str()));
+        return protocol(json!({ "action": "rename", "protocol_name": said.next()?, "new_name": said.next()? }));
+    }
+    if let Some(c) = PROTOCOL_DESCRIBE.captures(s) {
+        return protocol(json!({ "action": "describe", "protocol_name": name(c.iter().skip(1).flatten().next()?.as_str()) }));
+    }
+    if let Some(c) = PROTOCOL_EDIT.captures(s) {
+        return protocol(json!({ "action": "edit", "protocol_name": name(&c[1]) }));
+    }
+    if let Some(c) = PROTOCOL_DELETE.captures(s) {
+        return protocol(json!({ "action": "delete", "protocol_name": name(&c[1]) }));
+    }
+    let c = PROTOCOL_CREATE.captures(s)?;
+    let called = name(c.get(1).or(c.get(2))?.as_str());
+    // ("Make a new protocol" names none: the window opens for it, `hud_feel`.)
+    if called.is_empty() || matches!(called.as_str(), "new" | "neues" | "neuen" | "a" | "one" | "another") {
+        return None;
+    }
+    let steps: Vec<Value> = c.get(3).map_or_else(Vec::new, |m| protocol_steps(m.as_str())).iter().filter_map(|s| crate::protocols::Step::of_line(s)).map(|s| json!({ "tool": s.tool, "args": s.args })).collect();
+    // (No steps said: its window, with the new one on the form.)
+    protocol(if steps.is_empty() { json!({ "action": "edit", "protocol_name": called }) } else { json!({ "action": "create", "protocol_name": called, "steps": steps }) })
 }
 
 static AFFIRM: LazyLock<Regex> = LazyLock::new(|| {
@@ -4876,6 +4993,10 @@ pub fn parse_as_said(text: &str) -> Option<Intent> {
     }
     if WHATS_NEW.is_match(&s) {
         return tool("whats_new", json!({}));
+    }
+    if VERSION_ASK.is_match(&s) {
+        let build = crate::fleet::BUILD.split('-').next().unwrap_or_default();
+        return Some(Intent::Answer(format!("I'm on version {}, build {build}, Sir.", crate::fleet::VERSION)));
     }
     // The HUD's own views ("close your core", "bring back the screen", "dock all windows").
     if let Some(intent) = hud_view_command(text) {
@@ -6179,6 +6300,12 @@ mod tests {
         assert_eq!(window("Move it to the top").as_deref(), Some("snap_top"));
         assert_eq!(window("Bring it back").as_deref(), Some("focus"));
         assert_eq!(window("Close the tab").as_deref(), Some("close_tab"));
+        assert_eq!(window("Close my current tab").as_deref(), Some("close_tab"));
+        // Sir, 2026-11-26: "if i tell him to close my current browser tab than he should be able
+        // to do that": the browser's tab, wherever the browser stands.
+        for (text, app) in [("Close my current browser tab", "browser"), ("close the current tab in my browser", "browser"), ("Close this Chrome tab", "chrome"), ("Schließ den aktuellen Browser-Tab", "browser"), ("Schließe den Tab im Browser", "browser")] {
+            assert_eq!(tool(text), Some(("window_management", json!({"action": "close_tab", "target_window": app}))), "{text}");
+        }
         for text in ["Close it", "close that", "Kill it", "Mach es zu", "Schließ das"] {
             assert_eq!(tool(text), Some(("close_application", json!({"app_name": "it", "force": true}))), "{text}");
         }
@@ -6284,6 +6411,15 @@ mod tests {
         }
         // The news is a question of its own.
         assert_ne!(tool("What's new in the news?").map(|t| t.0), Some("whats_new"));
+        // (Sir, 2026-11-26: "I want to be able to ask JAI which version he is on".)
+        for said in ["Which version are you on?", "What version are you running?", "What's your version?", "Which version of JAI is this?", "Welche Version hast du?", "Was ist deine Versionsnummer?"] {
+            let answer = match parse(said) {
+                Some(Intent::Answer(line)) => line,
+                other => panic!("{said}: {other:?}"),
+            };
+            assert!(answer.contains(crate::fleet::VERSION), "{said}: {answer}");
+        }
+        assert!(!matches!(parse("Which version of Minecraft should I install?"), Some(Intent::Answer(_))));
     }
 
     #[test]
@@ -6625,6 +6761,44 @@ mod tests {
         assert_eq!(tool("Engage the Music & Chill Protocol").unwrap().1["protocol_name"], "music and chill");
     }
 
+    /// Sir, 2026-11-26: "he should be able to delete, create and edit his protocols if I tell him to".
+    #[test]
+    fn protocols_are_made_changed_and_deleted_by_his_word() {
+        let order = |action: &str, name: &str| json!({"action": action, "protocol_name": name});
+        let with = |mut args: Value, key: &str, value: &str| {
+            args[key] = json!(value);
+            args
+        };
+        let cases = [
+            ("Delete the gaming protocol.", order("delete", "gaming")),
+            ("Lösch das Gaming-Protokoll", order("delete", "gaming")),
+            ("Jay, forget the movie night protocol", order("delete", "movie night")),
+            ("Add play my rock playlist to the gaming protocol", with(order("add_step", "gaming"), "step", "play my rock playlist")),
+            ("Add a step to the gaming protocol that opens Discord", with(order("add_step", "gaming"), "step", "open discord")),
+            ("Füge Discord öffnen zum Gaming-Protokoll hinzu", with(order("add_step", "gaming"), "step", "discord öffnen")),
+            ("Take Discord out of the gaming protocol", with(order("remove_step", "gaming"), "step", "discord")),
+            ("Remove step 2 from the gaming protocol", with(order("remove_step", "gaming"), "step", "step 2")),
+            ("Rename the gaming protocol to focus", with(order("rename", "gaming"), "new_name", "focus")),
+            ("Benenne das Gaming-Protokoll in Zocken um", with(order("rename", "gaming"), "new_name", "zocken")),
+            ("What does the gaming protocol do?", order("describe", "gaming")),
+            ("Was macht das Gaming-Protokoll?", order("describe", "gaming")),
+            ("Edit the gaming protocol", order("edit", "gaming")),
+            ("Create a protocol called movie night", order("edit", "movie night")),
+        ];
+        for (said, args) in cases {
+            assert_eq!(tool(said), Some(("manage_stark_protocol", args)), "{said}");
+        }
+        let made = tool("Create a protocol called movie night that opens Netflix and dims the lights and the screens, then plays my focus playlist").expect("made").1;
+        assert_eq!(made["action"], "create");
+        assert_eq!(made["protocol_name"], "movie night");
+        let steps: Vec<&str> = made["steps"].as_array().expect("steps").iter().filter_map(|s| s["args"]["order"].as_str()).collect();
+        assert_eq!(steps, ["open netflix", "dim the lights and the screens", "play my focus playlist"]);
+        // ("Make a new protocol" names none: its window, not a protocol called "new".)
+        assert_ne!(tool("Make a new protocol").map(|t| t.1["protocol_name"].clone()), Some(json!("new")));
+        // Engaging one is still engaging it.
+        assert_eq!(tool("Engage the gaming protocol").unwrap().1["action"], "execute_protocol");
+    }
+
     #[test]
     fn confirmations_and_reply_claims() {
         for yes in ["Yeah, do that please?", "do it", "Yes please", "Yes", "mach das", "Ja, bitte", "Go ahead", "Sure, JAI"] {
@@ -6891,6 +7065,18 @@ mod tests {
         assert_eq!(tool("Set your core to 200 percent"), Some(("configure_interface", json!({"core_scale": 200.0}))));
         assert_eq!(tool("Rotate your core"), Some(("configure_interface", json!({"core_spin": "faster"}))));
         assert_eq!(tool("Spin faster"), Some(("configure_interface", json!({"core_spin": "faster"}))));
+        // Sir, 2026-11-26: "a simpler version of his core ... all files of his as dots connected with lines".
+        for (text, kind) in [
+            ("JAI, show me the simpler version of your core", "files"),
+            ("Show your core as dots", "files"),
+            ("show your files as a network", "files"),
+            ("Zeig mir die einfache Version deines Kerns", "files"),
+            ("show me the real version of your core again", "mind"),
+            ("show your core as rings", "rings"),
+            ("zeig deinen Kern als Ringe", "rings"),
+        ] {
+            assert_eq!(tool(text), Some(("configure_interface", json!({"core_kind": kind}))), "{text}");
+        }
         for text in ["JAI, reboot your language model", "Restart LLM", "Reboot brain", "Starte dein Sprachmodell neu"] {
             assert_eq!(tool(text).map(|t| t.0), Some("reboot_language_model"), "{text}");
         }
@@ -6988,6 +7174,16 @@ mod tests {
         assert_eq!(tool("Switch to wake word mode"), Some(("set_listening_mode", json!({"mode": "wake_word"}))));
         assert_eq!(tool("Only listen when I say JAI"), Some(("set_listening_mode", json!({"mode": "wake_word"}))));
         assert_eq!(tool("Only listen when I say Jay"), Some(("set_listening_mode", json!({"mode": "wake_word"}))));
+        // Sir, 2026-11-26: how he is to listen, in Sir's words.
+        for said in ["JAI, only answer when I say your name", "Only respond if I said your name somewhere in my sentence", "Antworte nur, wenn ich deinen Namen sage", "only react to sentences with your name"] {
+            assert_eq!(tool(said), Some(("set_listening_mode", json!({"mode": "wake_word"}))), "{said}");
+        }
+        for said in ["Please listen if you are talked to", "JAI, answer when you think I'm talking to you", "respond whenever someone is speaking to you", "Antworte, wenn man mit dir redet", "only answer when you're spoken to"] {
+            assert_eq!(tool(said), Some(("set_listening_mode", json!({"mode": "when_spoken_to"}))), "{said}");
+        }
+        for said in ["What's your name?", "I'm not talking to you", "Tell me when I talk too much"] {
+            assert_ne!(tool(said).map(|t| t.0), Some("set_listening_mode"), "{said}");
+        }
         let mix = tool("Set Sonora to 30% and Discord to 100%").unwrap();
         assert_eq!(mix.0, "control_audio_mixer");
         assert_eq!(mix.1["apps"], json!([{"app": "sonora", "level": 30}, {"app": "discord", "level": 100}]));

@@ -621,8 +621,10 @@ async fn for_account<S: AsyncWrite + Unpin>(stream: &mut S, app: &Jai, req: &Req
         }
         // A JAI on the account's PC (`fleet`): how it is, Sir's orders for it, the voices.
         ("POST", "/api/pc") => {
-            crate::accounts::seen(db, name, device(req, req.key()));
-            respond_json(stream, "200 OK", &crate::fleet::hello(db, name, &req.json())).await;
+            let pc = device(req, req.key());
+            let id = pc.id.clone();
+            crate::accounts::seen(db, name, pc);
+            respond_json(stream, "200 OK", &crate::fleet::hello(db, name, &id, &req.json())).await;
         }
         // … and the version Sir's PC runs, which it takes at once.
         ("GET", "/api/pc/update") => {

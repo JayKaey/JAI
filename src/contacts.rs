@@ -27,6 +27,28 @@ pub struct Contact {
     pub priority: bool,
 }
 
+/// The contacts window (Sir, 2026-11-26: "the contacts window looks wrong": a second heading under
+/// the window's bar over one long line per person): one card each, the name over what reaches
+/// that person.
+pub fn window_markdown(all: &[Contact]) -> String {
+    if all.is_empty() {
+        return "No contacts saved yet.\n\nSay “save Max Mustermann's number, +49 151 2345678”.".into();
+    }
+    all.iter()
+        .map(|c| {
+            let mut name = vec![format!("**{}**", c.name)];
+            name.extend([c.nickname.clone(), if c.priority { "priority".into() } else { String::new() }].into_iter().filter(|s| !s.is_empty()));
+            let mut reach: Vec<String> = [c.phone_number.clone(), c.email.clone()].into_iter().filter(|s| !s.is_empty()).collect();
+            if !c.whatsapp_name.is_empty() && !c.whatsapp_name.eq_ignore_ascii_case(&c.name) {
+                reach.push(format!("WhatsApp “{}”", c.whatsapp_name));
+            }
+            let reach = if reach.is_empty() { "no number or address yet".to_string() } else { reach.join("  ·  ") };
+            format!("{}\n{reach}", name.join("  ·  "))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 impl Contact {
     /// "Max (+49151…, WhatsApp "Maxi")".
     pub fn describe(&self) -> String {

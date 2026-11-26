@@ -283,6 +283,9 @@ pub struct FrameContext {
     pub ptt: bool,
     /// e.g. while the microphone test records: track noise, never open utterances.
     pub suspended: bool,
+    /// How loud his own voice comes back at the microphone right now (rms; 0 with a headset or
+    /// in silence): Sir speaking over him must be louder than that (`ears::EchoGauge`).
+    pub echo_floor: f32,
 }
 
 #[derive(Debug)]
@@ -495,6 +498,7 @@ impl VadMachine {
         let voiced = if barge_mode {
             prob >= (self.params.start_threshold + self.params.barge_in_boost).min(0.95)
                 && rms >= self.start_gate() * 1.5
+                && rms >= ctx.echo_floor
         } else {
             prob >= self.params.start_threshold && rms >= self.start_gate()
         };

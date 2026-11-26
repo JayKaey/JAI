@@ -970,7 +970,11 @@ impl Jai {
                 crate::hyper_cortex::prefetch_context();
                 // Sir is still finishing his thought: pull back the turn his first words started.
                 let withdrawn = self.withdraw_unanswered_turn();
-                if barge_in && !withdrawn {
+                // (With speakers he may be hearing himself: he stops once the words are known to
+                // be Sir's, in `process_utterance`.)
+                if barge_in && !withdrawn && !ptt && self.inner.controls.hears_himself() {
+                    info!("[TURN] Speech over JAI with the speakers on: he goes on until he knows it is Sir's");
+                } else if barge_in && !withdrawn {
                     info!("[TURN] Barge-in: user speaking over JAI");
                     self.interrupt(if ptt { "push-to-talk" } else { "barge-in" });
                     self.emit(HudEvent::VadEvent { event: "barge_in".into(), detail: String::new() });
@@ -1333,8 +1337,22 @@ impl Jai {
                     restore.await;
                 });
             }
+            Sound::Sneeze if settings.bless_sneezes => self.bless(),
             _ => {}
         }
+    }
+
+    /// Sir sneezed: "Bless you, Sir." (Sir, 2026-11-26), once for a fit of them, and never over a
+    /// turn or while he is not to listen.
+    fn bless(&self) {
+        static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if self.busy() || crate::listening_lock::is_locked() || last.is_some_and(|t| t.elapsed() < Duration::from_secs(20)) {
+            return;
+        }
+        *last = Some(Instant::now());
+        info!("[RADAR] A sneeze: bless you");
+        self.speak_standalone("Bless you, Sir.", false, Trigger::System);
     }
 
     /// The home geofence fired: wake the HUD, start the playlist / protocol, greet Sir.
@@ -1629,6 +1647,9 @@ impl Jai {
         // and to be kept with what it was taken for (`voice_clips`).
         let again_audio = (self.inner.config.read(|c| c.whisper_second_hearing) && pcm.len() <= SECOND_HEARING_MOST).then(|| pcm.clone());
         let clip_audio = (!scripted && pcm.len() <= SECOND_HEARING_MOST && self.inner.config.read(|c| c.keep_voice_clips)).then(|| pcm.clone());
+        // (A sneeze opens the ears as words do, and the radar is deaf meanwhile: the sound model
+        // tells it from the clip should Whisper hear no words in it.)
+        let sneeze_audio = (!u.ptt && pcm.len() <= 40_000 && self.inner.config.read(|c| c.acoustic.bless_sneezes)).then(|| pcm.clone());
         crate::mind_activity::pulse("stt.rs");
         // With a head start the transcript is already on its way (or here): only the rest of the
         // decode is waited for.
@@ -1667,6 +1688,15 @@ impl Jai {
         };
         // His name as the fixed phrases know it: "Jay, wake up" / "wake up, J.A.I." → "JAI, wake up".
         transcript.text = crate::wake::canon(&transcript.text);
+        if let Some(clip) = sneeze_audio.filter(|_| transcript.text.is_empty() || crate::sound_sense::sneeze_word(&transcript.text)) {
+            let model = crate::sound_sense::available();
+            let sneezed = !transcript.text.is_empty() || (model && tokio::task::spawn_blocking(move || crate::sound_sense::scores(&clip).is_ok_and(|p| crate::sound_sense::sneezed(&p))).await.unwrap_or(false));
+            if sneezed {
+                self.bless();
+                self.rest_state();
+                return;
+            }
+        }
         if transcript.text.is_empty() {
             // A first piece too short or unclear on its own ("JAI" alone): with the rest of
             // the sentence it may well be words.
@@ -1677,6 +1707,22 @@ impl Jai {
             }
             self.rest_state();
             return;
+        }
+        // Heard over him: his own words back from the speakers are nothing (Sir, 2026-11-26:
+        // "he hears himself and stops talking / responds to himself"); Sir's stop him now.
+        if u.barge_in && !u.ptt && self.inner.controls.hears_himself() {
+            if crate::tts::echoes_him(&transcript.text) {
+                info!("[ECHO] His own words, heard back from the speakers: '{}'", transcript.text);
+                if self.inner.tts.is_speaking() {
+                    self.set_state("speaking", "Speaking");
+                } else {
+                    self.rest_state();
+                }
+                return;
+            }
+            info!("[TURN] Barge-in: Sir's words over JAI");
+            self.interrupt("barge-in");
+            self.emit(HudEvent::VadEvent { event: "barge_in".into(), detail: String::new() });
         }
 
         // Sir's privacy lock ("stop listening"): nothing gets through — no command, no question,
@@ -1911,6 +1957,9 @@ impl Jai {
         // JAI; everything else goes through the four-layer addressee detector.
         let addressee = if homecoming || u.ptt || u.barge_in {
             crate::ears::Addressee::WakeWord
+        } else if wake_required && self.inner.config.read(|c| c.name_only) {
+            // "Only answer when I say your name" (Sir, 2026-11-26): his name in the sentence or nothing.
+            if wake.matched { crate::ears::Addressee::WakeWord } else { crate::ears::Addressee::Unaddressed }
         } else if !wake_required && !self.inner.config.read(|c| c.addressee_detection) {
             crate::ears::Addressee::HandsFree
         } else {
@@ -2339,6 +2388,8 @@ impl Jai {
         // just below) — before the turn even queues. The brain's silent command reports the
         // same run (`stop_all_active_media` shares one result per burst).
         if crate::intents::is_media_stop(&text) {
+            // (A ringing alarm is what "stop" means first.)
+            crate::smart_alarm::hush();
             tokio::spawn(async {
                 crate::music::stop_all_active_media().await;
             });

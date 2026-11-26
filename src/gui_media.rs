@@ -484,7 +484,7 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
             let at = rect.min + vec2((i % cols) as f32 * (cell.x + gap), (i / cols) as f32 * (cell.y + gap));
             let r = Rect::from_min_size(at, cell);
             let resp = ui.interact(r, egui::Id::new(("jai_cam_tile", i)), Sense::click());
-            camera_frame(ui, r, cam, *km, true, resp.hovered());
+            camera_frame(ui, r, cam, *km, i + 1, true, resp.hovered());
             if resp.on_hover_text("Show this camera large").clicked() {
                 crate::webcams::select(i);
             }
@@ -495,7 +495,7 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
     let side = if view.cams.len() > 1 && rect.width() > 620.0 { 230.0 } else { 0.0 };
     let main = Rect::from_min_max(rect.min, pos2(rect.right() - side - if side > 0.0 { 8.0 } else { 0.0 }, rect.bottom()));
     if let Some((cam, km)) = view.current() {
-        camera_frame(ui, main, cam, *km, false, false);
+        camera_frame(ui, main, cam, *km, view.index + 1, false, false);
         if let Some(forward) = arrows(ui, main) {
             let n = view.cams.len();
             crate::webcams::select(if forward { (view.index + 1) % n } else { (view.index + n - 1) % n });
@@ -505,9 +505,9 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
         let list = Rect::from_min_max(pos2(rect.right() - side, rect.top()), rect.max);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)));
         crate::holo_block::faded(&mut child, egui::ScrollArea::vertical().id_salt("jai_cam_list"), |ui| {
-            for (i, (cam, km)) in view.cams.iter().enumerate() {
-                let text = RichText::new(format!("{}\n{} · {:.1} km", cam.title(), cam.area, km)).font(crate::holo::font(crate::holo::Face::Mono, 11.0)).color(if i == view.index { accent() } else { super::strip_ink() });
-                if ui.add(egui::SelectableLabel::new(i == view.index, text)).clicked() {
+            for (i, (cam, _)) in view.cams.iter().enumerate() {
+                let title: String = cam.title().chars().take(24).collect();
+                if crate::holo_ui::item(ui, format!("{:02}  {title}", i + 1), i == view.index).clicked() {
                     crate::webcams::select(i);
                 }
             }
@@ -515,8 +515,19 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
     }
 }
 
-/// A camera's latest frame, fetched again when it is due, with its name, place, source and age.
-fn camera_frame(ui: &Ui, rect: Rect, cam: &crate::webcams::Cam, km: f64, on_wall: bool, hovered: bool) {
+/// "48°46'56"N 9°10'37"E": where a camera stands, as a drawing gives it.
+fn dms(lat: f64, lon: f64) -> String {
+    let one = |v: f64, pos: char, neg: char| {
+        let s = (v.abs() * 3600.0).round() as u64;
+        format!("{}°{:02}'{:02}\"{}", s / 3600, s / 60 % 60, s % 60, if v >= 0.0 { pos } else { neg })
+    };
+    format!("{} {}", one(lat, 'N', 'S'), one(lon, 'E', 'W'))
+}
+
+/// Camera `n` (its number among those shown): its latest frame, fetched again when it is due,
+/// drawn as the films draw a feed, where every mark reads something (Sir, 2026-11-26: "more
+/// movie accurate").
+fn camera_frame(ui: &Ui, rect: Rect, cam: &crate::webcams::Cam, km: f64, n: usize, on_wall: bool, hovered: bool) {
     use crate::image_viewer::pixels;
     let key = cam.key();
     match pixels::get(&key) {
@@ -542,21 +553,38 @@ fn camera_frame(ui: &Ui, rect: Rect, cam: &crate::webcams::Cam, km: f64, on_wall
             p.text(rect.center(), Align2::CENTER_CENTER, text, crate::holo::font(crate::holo::Face::Mono, 11.0), super::strip_muted());
         }
     }
+    let ink = crate::holo::theme().ink();
     let edge = if hovered { accent() } else { crate::hud_board::border_colour().gamma_multiply(0.7) };
     crate::holo::outline(&p, &crate::holo::plate(rect, [0.0; 4]), edge);
-    // A red dot, LIVE and the name.
-    let top = tag(&p, rect.left_top() + vec2(6.0, 6.0), Align2::LEFT_TOP, &format!("   LIVE  {}", cam.title()), super::strip_ink());
-    p.circle_filled(pos2(top.left() + 8.0, top.center().y), 3.5, crate::holo::theme().alert());
-    let age_text = match &frame {
-        Some(f) => match f.modified {
-            Some(m) => format!("frame {} old", age(m)),
-            None => format!("checked {} ago", age(f.fetched)),
-        },
-        None => "waiting for a frame".to_string(),
+    // Its corners and where it aims, in ink.
+    crate::holo::corner_ticks(&p, rect.shrink(8.0), if on_wall { 10.0 } else { 18.0 }, crate::holo::a(ink, 0.8));
+    let aim = rect.center();
+    for d in [vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0)] {
+        crate::holo::path(&p, &[aim + d * 6.0, aim + d * if on_wall { 12.0 } else { 18.0 }], crate::holo::a(ink, 0.45));
+    }
+    // Its number as a solid tab, its name.
+    let tab = crate::holo_kit::chip(&p, rect.left_top() + vec2(12.0, 12.0), &format!("{n:02}"), accent(), true, 1.0);
+    tag(&p, pos2(tab.right() + 6.0, tab.center().y), Align2::LEFT_CENTER, &cam.title().to_uppercase(), super::strip_ink());
+    // The lamp: lit in the accent, beating with the seconds, while its frames come; dark once
+    // the frame is three refreshes old.
+    let taken = frame.as_ref().map(|f| f.modified.unwrap_or(f.fetched));
+    let old = taken.and_then(|t| SystemTime::now().duration_since(t).ok()).map(|d| d.as_secs());
+    let fresh = old.is_some_and(|secs| secs <= 3 * cam.refresh_secs(on_wall).max(cam.interval as u64));
+    let beat = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs()) % 2 == 0;
+    let lamp = tag(&p, rect.right_top() + vec2(-12.0, 12.0), Align2::RIGHT_TOP, if fresh { "   LIVE" } else { "   STALE" }, if fresh { super::strip_ink() } else { super::strip_muted() });
+    p.circle_filled(pos2(lamp.left() + 8.0, lamp.center().y), 3.5, if fresh && beat { accent() } else { crate::holo::a(ink, 0.25) });
+    // Where it stands and how old its frame is; the network and how far from the place asked for.
+    let age_text = match (&frame, taken) {
+        (Some(f), Some(t)) if f.modified.is_some() => format!("FRAME {} OLD", age(t).to_uppercase()),
+        (Some(f), _) => format!("CHECKED {} AGO", age(f.fetched).to_uppercase()),
+        _ => "WAITING FOR A FRAME".to_string(),
     };
-    let far = if km >= 0.05 { format!(" · {km:.1} km away") } else { String::new() };
-    let line = if on_wall { format!("{} · {age_text}", cam.area) } else { format!("{} · {} · {age_text}{far}", cam.area, cam.source) };
-    tag(&p, rect.left_bottom() + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, &line, super::strip_muted());
+    let line = if on_wall { age_text } else { format!("{} // {} // {age_text}", cam.area.to_uppercase(), dms(cam.lat, cam.lon)) };
+    tag(&p, rect.left_bottom() + vec2(12.0, -12.0), Align2::LEFT_BOTTOM, &line, super::strip_muted());
+    if !on_wall {
+        let far = if km >= 0.05 { format!(" // {km:.1} KM") } else { String::new() };
+        tag(&p, rect.right_bottom() + vec2(-12.0, -12.0), Align2::RIGHT_BOTTOM, &format!("{}{far}", cam.source.to_uppercase()), super::strip_muted());
+    }
 }
 
 // --------------------------------------------------------------------------- street view ----
@@ -804,6 +832,39 @@ mod tests {
         // Nothing behind the eye is drawn: every triangle's corners are in front.
         let behind = mesh.indices.iter().filter(|i| mesh.vertices[**i as usize].pos == rect.center() && mesh.vertices[**i as usize].uv != pos2(0.5, 0.5)).count();
         assert_eq!(behind, 0);
+    }
+
+    /// A live camera drawn as the films draw a feed (Sir, 2026-11-26: "more movie accurate"):
+    /// its number, name, lamp, where it stands, its frame's age and its network, nothing cut off
+    /// or drawn over; the others beside it in the house's rows; then a wall of four.
+    #[test]
+    fn a_live_camera_reads_like_a_feed() {
+        use crate::visual_ui_verifier::{self as visual, Stage};
+        let _look = crate::holo_theme::look_for_pictures();
+        assert_eq!(dms(48.7823, 9.177), "48°46'56\"N 9°10'37\"E");
+        assert_eq!(dms(-33.8688, -151.2093), "33°52'08\"S 151°12'33\"W");
+        let _turn = crate::webcams::view_turn();
+        crate::webcams::ensure_demo();
+        let cam = crate::webcams::nearest(51.5055, -0.0754, 1).remove(0).0;
+        crate::webcams::open_cam(&cam);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let handle = rt.handle().clone();
+        let mut stage = Stage::new(vec2(1040.0, 660.0));
+        let mut draw = |ctx: &egui::Context| {
+            egui::CentralPanel::default().frame(Frame::none().fill(super::super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| cameras_body(ui, &handle));
+        };
+        let frame = stage.frames(4, &mut draw);
+        stage.raster(&frame).save("panel_live_camera");
+        assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
+        assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
+        for shown in ["01", "TOWER BRIDGE APPROACH", "LIVE", "51°30'20\"N", "TFL JAMCAMS", "02  Elephant and Castle"] {
+            assert!(!frame.find_text(shown).is_empty(), "'{shown}' is not on the feed");
+        }
+        crate::webcams::show_wall(4);
+        let frame = stage.frames(4, &mut draw);
+        stage.raster(&frame).save("panel_live_camera_wall");
+        assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
+        crate::webcams::close();
     }
 
     #[test]

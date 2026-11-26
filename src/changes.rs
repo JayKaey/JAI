@@ -91,6 +91,42 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
     Release {
+        date: "2026-11-26",
+        name: "Alarms, better ears and windows that make way",
+        entries: &[
+            new("Alarms", "\"Set an alarm in 20 minutes\" or \"for 7 pm to call mum\": it rings until you stop it.", "alarms"),
+            new("How he listens", "\"Only answer when I say your name\", or \"answer when you're spoken to\".", "listening_modes"),
+            new("Bless you", "He hears you sneeze and says \"Bless you, Sir.\"", "bless_you"),
+            new("Apps by what they are", "\"Open the trash bin\", \"open my mail\": the place, or the app of that kind you have.", "apps_by_kind"),
+            better_see("Protocols by voice", "\"Add play my rock playlist to the gaming protocol\"; rename, take out, delete.", "protocols"),
+            added("Close your browser tab", "\"Close my current browser tab\": the browser's tab, even with another window in front."),
+            better("Windows open in front, in the middle", "A window he opens comes up in front of every other, in the middle of your screen."),
+            better("Others make way", "\"Move the earth window to the middle\": his windows standing there glide aside."),
+            fixed("He no longer answers himself", "Over speakers his own voice coming back no longer stops him or reads as an order."),
+            fixed("No claps while not listening", "Told not to listen, he hears no claps or knocks either."),
+            fixed("Fewer false claps", "Typing, a ticking clock or a sound the model is unsure of no longer counts as claps."),
+            fixed("Any curve in the plotter", "\"Plot me x^3\" or \"plot sine of x and x cubed\" draws those curves, not x²."),
+            fixed("Plotter window", "One header; the input line and its ADD key stay in their column; its own hint."),
+            fixed("Contacts window", "One card per person: the name over number, email and WhatsApp; no second heading."),
+            new("The corner orb and starting muted", "\"Only show the corner orb when you're talking\", \"always start muted\".", "orb_and_start"),
+            new("Which version he is", "\"Which version are you on?\"; your friends' versions show in the account list.", "version"),
+            better("One account, several PCs", "Logged in on a desktop and a laptop: an order for that PC reaches both, games kept apart."),
+            fixed("A random song from a playlist", "\"Play a random song from my Focus playlist\" plays one of its songs, not its first."),
+            fixed("He no longer calls you Earth", "A misheard \"call me Earth\" is undone; a title he stores now always matches your settings."),
+            fixed("Windows move to your main monitor", "\"Move the protocol window to my main monitor\" moves it; it no longer reads your mail."),
+            fixed("Lyrics and subtitles stay as you set them", "On or off, the lyrics and live subtitles stay so after a restart; also rows in the settings."),
+            better("Smoother scrolling, lighter on your PC", "The settings, console and changes now draw apart from the board, not with its every frame."),
+            new("Follow a flight's every move", "A followed plane glides on between fixes, its trail and the way to its airport drawn.", "flight_follow"),
+            fixed("Why a flight can't be found", "He says why: no aircraft in the receivers' reach, none on that route, or the feed down."),
+            new("His core's other versions", "\"Show me the simpler version of your core\": his files as points joined by their links.", "core_versions"),
+            better("Turn his core any way", "In the core view a drag turns it on over the top and round: every side, no stop."),
+            new("Live cameras as the films show them", "\"Show me a random live camera\"; every feed numbered, its lamp, place and frame age.", "live_cameras"),
+            better("Live cameras in more places", "Eight more networks: Georgia, Nevada, Ontario, Alberta, Atlantic Canada and Yukon."),
+            fixed("3D houses seen from a low angle", "Houses behind the middle fall back into the deep, not a tangle; far roofs carry no label."),
+            new("Wi-Fi, Bluetooth, power plan, dark or light", "\"Wi-Fi off\", \"airplane mode on\", \"high performance mode\", \"switch Windows to dark mode\".", "pc_switches"),
+        ],
+    },
+    Release {
         date: "2026-11-25",
         name: "J.A.I.OS",
         entries: &[
@@ -708,6 +744,76 @@ pub const RELEASES: &[Release] = &[
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
     Explanation {
+        id: "alarms",
+        title: "Alarms",
+        what: "\"Set an alarm for 7 pm\", \"set an alarm in 20 minutes\" or \"wake me in an hour\": at that time his alarm tone plays again and again until you stop it. An alarm for something (\"set an alarm for 7 pm to call mum\") says what it is for once you stop it; a wake-up in the morning greets you and reads the morning briefing, with your music fading in if you named a playlist. \"Stop\", \"I'm up\" or \"turn it off\" ends the ringing, \"snooze\" brings it back in nine minutes.",
+        say: &["Jay, set an alarm in 20 minutes.", "Jay, set an alarm for 7 pm to call mum.", "Jay, wake me at 6:30.", "Jay, what alarms do I have?", "Jay, cancel the 7 pm alarm.", "Jay, stell einen Wecker in einer Stunde."],
+        know: "Left alone, an alarm rings for two and a half minutes. A wake-up checks your WebUntis timetable 90 minutes before and moves later when the first lessons are cancelled; an alarm in the evening or for something is kept as it is. \"Cancel my alarms\" takes all of them away, \"cancel the 7 pm alarm\" only that one.",
+    },
+    Explanation {
+        id: "listening_modes",
+        title: "How he listens",
+        what: "You say how he is to listen. \"Only answer when I say your name\": a sentence is his only with his name in it, anywhere in it. \"Answer when you're spoken to\" (as he starts): his name, and also what is plainly meant for him without it, in a conversation with him or an order while his window is in front. \"Switch to hands-free\": no name needed at all.",
+        say: &["Jay, only answer when I say your name.", "Jay, please listen if you are talked to.", "Jay, switch to hands-free mode.", "Jay, antworte nur, wenn ich deinen Namen sage."],
+        know: "With his name required, the answer to a question of his (\"yes\", \"the second one\") still needs no name. \"Undo that\" brings back the way he listened before. \"Wake word needed\" in the VIEW menu switches between his name and hands-free.",
+    },
+    Explanation {
+        id: "bless_you",
+        title: "Bless you",
+        what: "When you sneeze, he says \"Bless you, Sir.\" He knows a sneeze by its sound (his sound model tells it from a cough or a word) and by what the speech recognition makes of it (\"achoo\", \"hatschi\"), and says it once for a fit of sneezes.",
+        say: &["Achoo!", "Hatschi!"],
+        know: "Not while he is busy with a turn, not while he is told not to listen, and once in twenty seconds at most. Switch it off under the acoustic radar in the integrations panel (\"Bless you\" when you sneeze).",
+    },
+    Explanation {
+        id: "version",
+        title: "Which version he is",
+        what: "Ask which version he is on: he says his version number and the build it was made from. A friend's PC says the same of itself, and your account dashboard shows each of their PCs' versions beside their name, so you see at a glance who runs the newest.",
+        say: &["Jay, which version are you on?", "Jay, what's your version?", "Jay, welche Version hast du?"],
+        know: "A friend's PC logged in at yours runs the version yours runs: it fetches a new one by itself. One account may be logged in on several PCs (a desktop and a laptop); an order for that person's PC reaches each of them once.",
+    },
+    Explanation {
+        id: "orb_and_start",
+        title: "The corner orb and starting muted",
+        what: "The corner orb is his core coming out to a corner while your windows cover it. Tell him to show it only while he speaks (not for his name heard or a short order like play or stop), to turn it off, or to bring it back. And tell him to start with the microphone off from now on.",
+        say: &["Jay, only show the corner orb when you're talking.", "Jay, turn off the corner orb.", "Jay, show the corner orb for everything again.", "Jay, always start muted.", "Jay, starte immer stumm."],
+        know: "All three are switches in the settings too (Corner orb, Corner orb only while he speaks, Start muted). Started muted, he hears nothing until your mute key or a click on the meter turns the microphone on; \"never start muted\" undoes it.",
+    },
+    Explanation {
+        id: "flight_follow",
+        title: "Following a flight",
+        what: "\"Track a flight from Frankfurt to New York\" or \"follow LH 400\": he finds the plane in the live feed and follows it on the Earth. It no longer jumps every few seconds: between two fixes he flies it on along its heading at its speed, the camera with it, its trail behind it in your colour and the way to its airport dashed ahead. Drag the map to look round; the plane flies on.",
+        say: &["Jay, track a flight from Frankfurt to New York.", "Jay, follow LH 400.", "Jay, stop tracking."],
+        know: "The feed comes from receivers on the ground, so far out over an ocean a plane is beyond their reach. When he can't find one he says why (no aircraft in reach, none on that route, the feed not answering); when a followed plane is silent for a minute he says he has lost it and why, and he tells you when it has landed.",
+    },
+    Explanation {
+        id: "core_versions",
+        title: "His core's versions",
+        what: "In the core view (\"show me your core\") he shows himself three ways: his mind, the sphere of circuitry as before; his files, the simpler version, where each of his source files is a point sized by its lines and joined by a line to every file it uses; and his rings, the simple core, large. The parts working right now glow in your colour. Drag to turn it any way, all the way round; the wheel zooms.",
+        say: &["Jay, show me the simpler version of your core.", "Jay, show your core as dots.", "Jay, show me the real version of your core again.", "Jay, show your core as rings.", "Jay, zeig mir die einfache Version deines Kerns."],
+        know: "The MIND, FILES and RINGS keys at the top left switch too. Point at a file to read its name, its lines and how many links it has. A double click turns it back to where it started.",
+    },
+    Explanation {
+        id: "live_cameras",
+        title: "Live cameras",
+        what: "\"Show me a live camera from London\", \"cameras in Toronto\" or \"show me a random live camera\": public traffic and weather cameras worldwide, drawn as the films draw a feed. Each has its number as a tab, its name, a lamp that beats while its frames come, where it stands to the second, how old its frame is and whose network it is. A random camera comes from a network picked at random, so it is somewhere else each time.",
+        say: &["Jay, show me a random live camera.", "Jay, show me a live camera from London.", "Jay, show me a camera wall of Toronto.", "Jay, zeig mir eine zufällige Kamera."],
+        know: "The cameras are the public ones of road and weather networks: London, California, Hong Kong, New Zealand and the Alps, eight US road networks, and since today Georgia, Nevada, Ontario, Alberta, Nova Scotia, New Brunswick, Newfoundland and Yukon. The German Autobahn's own cameras no longer publish their pictures, so in Germany the Alpine cameras are the nearest. The frames are stills, renewed every few seconds to minutes; a lamp that goes dark means the network has sent nothing new for a while.",
+    },
+    Explanation {
+        id: "pc_switches",
+        title: "The PC's switches",
+        what: "He switches what Windows' quick settings switch: the Wi-Fi, Bluetooth and airplane mode, the power plan (high performance, balanced, power saving) and whether Windows' apps and taskbar are dark or light. On Linux the same orders go to rfkill, the power profiles and Plasma's colours.",
+        say: &["Jay, turn off the Wi-Fi.", "Jay, turn Bluetooth on.", "Jay, switch to high performance mode.", "Jay, switch Windows to dark mode.", "Jay, schalte das WLAN aus."],
+        know: "Turning the Wi-Fi off also cuts his own internet (the weather, the news, the phone page) until you turn it on again. Many PCs have only the Balanced plan; he says so when the one you ask for is missing. \"Dark mode\" alone is still his own look; say \"Windows\" to mean Windows.",
+    },
+    Explanation {
+        id: "apps_by_kind",
+        title: "Apps by what they are",
+        what: "Say what you want rather than its name: \"open the trash bin\" opens the recycle bin, \"open my mail\" the mail app you have (Outlook, Thunderbird …), \"open my notes\" Obsidian or OneNote, whichever is installed. \"Close my current browser tab\" closes the tab of your browser even while another window is in front.",
+        say: &["Jay, open the trash bin.", "Jay, open my mail.", "Jay, close my current browser tab.", "Jay, öffne den Papierkorb."],
+        know: "Kinds he knows: mail, photo and video editors, notes, spreadsheets, presentations, PDFs, video players, games, passwords, screenshots, screen recording, 3D and VPN. When nothing of that kind is installed he says so and names the closest app he found, without starting it. On Linux the trash opens in Dolphin or Nautilus.",
+    },
+    Explanation {
         id: "system_by_voice",
         title: "The system by voice",
         what: "On J.A.I.OS he is the system's root: he installs and removes programs, updates the whole system, takes the last update back, goes back to a snapshot, finishes Secure Boot and runs single commands as root. Installing from the repositories and updating run at once; removing, going back, Secure Boot's keys, a command as root and a package from the AUR are asked aloud first.",
@@ -1159,8 +1265,8 @@ pub const EXPLANATIONS: &[Explanation] = &[
         id: "protocols",
         title: "Protocol window",
         what: "A protocol is a list of things he does when something starts it. The Protocol window shows everything that starts by itself in one list: your protocols (the built-in ones too, yours to change), the rules you said aloud (\"when I clap twice, open Spotify\") and his own reactions to two claps and to knocking. A protocol reads in two steps. 01 STARTS WHEN: any one of its lines, a phrase you say, a sound, a program starting or closing, a time of day or a friend's PC (the ADD keys). 02 THEN I DO: its orders in order, as you would say them to him, or TELL ME. SAVE keeps it, RUN NOW runs it, DELETE takes it away; a rule said aloud becomes a protocol with MAKE IT A PROTOCOL.",
-        say: &["open the protocol window", "when I clap twice, open Spotify", "when someone knocks, tell me", "wake up, daddy's home", "engage the gaming protocol"],
-        know: "Every protocol also starts by its name (\"engage the … protocol\"). As it starts he says one line, \"Activating the Gaming Protocol, Sir\", and runs its orders without a word: only an order that asks something (\"what's the weather\") is answered aloud, and an order that failed is told afterwards. A line he does not understand is refused when you save, with the reason. A rule or protocol of yours on two claps or on knocking takes the place of his own reaction to it. Other PCs are seen through the link of your PCs: a friend's PC tells yours which game it runs. The orders run as if you had said them, so \"open the earth on Max's PC\" runs on his PC.",
+        say: &["open the protocol window", "create a protocol called movie night that opens Netflix and dims the screens", "add play my rock playlist to the gaming protocol", "take Discord out of the gaming protocol", "rename the gaming protocol to focus", "what does the gaming protocol do", "edit the gaming protocol", "delete the gaming protocol", "save my current setup as gaming protocol", "when I clap twice, open Spotify", "when someone knocks, tell me", "wake up, daddy's home", "engage the gaming protocol"],
+        know: "All of it works by voice too: create a protocol with its steps, add a step, take one out (by its words or its number, \"remove step 2\"), rename, describe or delete one; \"edit the gaming protocol\" opens the window with it on the form, where EDIT changes a step in place. Every protocol also starts by its name (\"engage the … protocol\"). As it starts he says one line, \"Activating the Gaming Protocol, Sir\", and runs its orders without a word: only an order that asks something (\"what's the weather\") is answered aloud, and an order that failed is told afterwards. A line he does not understand is refused when you save, with the reason. A rule or protocol of yours on two claps or on knocking takes the place of his own reaction to it. Other PCs are seen through the link of your PCs: a friend's PC tells yours which game it runs. The orders run as if you had said them, so \"open the earth on Max's PC\" runs on his PC.",
     },
     Explanation {
         id: "simulations_3d",
@@ -1311,16 +1417,34 @@ fn day_words(date: &str) -> String {
 
 /// Draws the changes block and the explanation windows that are open.
 pub fn show(ctx: &egui::Context) {
+    // (Each in a window that draws apart from the board: `gui::own_block`.)
+    if is_open() && crate::gui::own_block(ctx, ID, "Changes // what is new, better, fixed", [700.0, 640.0], 0, true, list) {
+        open(false);
+    }
+    // The explanations: each a block born as a window of its own.
+    let explaining = lock(&UI).explaining.clone();
+    for id in explaining {
+        let Some(e) = explanation(id) else { continue };
+        let block = explain_id(id);
+        if crate::gui::own_block(ctx, &block, &format!("{} // how it works", e.title), [520.0, 460.0], 0, true, move |ui| explained(ui, e)) {
+            lock(&UI).explaining.retain(|open| *open != id);
+            crate::hud_dock::forget(&block);
+        }
+    }
+}
+
+/// The changes list: the search, the kinds, every day's entries.
+fn list(ui: &mut egui::Ui) {
     let accent = crate::hud_board::active_colour();
     let ink = crate::holo::theme().ink();
     let muted = crate::holo::theme().muted();
-    if is_open() {
+    {
         let (mut search, mut only) = {
             let ui = lock(&UI);
             (ui.search.clone(), ui.only)
         };
         let mut asked: Option<&'static str> = None;
-        let closed = crate::gui::block(ctx, ID, "Changes // what is new, better, fixed", [700.0, 640.0], |ui| {
+        {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("FIND").font(face(Face::Label, 9.0)).color(muted));
                 crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut search).desired_width(220.0).hint_text("a word, a date").font(face(Face::Body, 13.5)));
@@ -1379,48 +1503,39 @@ pub fn show(ctx: &egui::Context) {
                 }
                 ui.add_space(10.0);
             });
-        });
+        }
         {
             let mut ui = lock(&UI);
             (ui.search, ui.only) = (search, only);
         }
         if let Some(id) = asked {
             open_explanation(id);
-        }
-        if closed {
-            open(false);
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
         }
     }
-    // The explanations: each a block born as a window of its own.
-    let explaining = lock(&UI).explaining.clone();
-    for id in explaining {
-        let Some(e) = explanation(id) else { continue };
-        let block = explain_id(id);
-        let closed = crate::gui::block(ctx, &block, &format!("{} // how it works", e.title), [520.0, 460.0], |ui| {
-            crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
-                ui.add_space(4.0);
-                ui.label(RichText::new(e.title).font(face(Face::Head, 24.0)).color(ink));
-                ui.add_space(8.0);
-                ui.add(egui::Label::new(RichText::new(e.what).color(ink).font(face(Face::Body, 14.0))).wrap());
-                ui.add_space(14.0);
-                ui.label(RichText::new("WHAT TO SAY").font(face(Face::Label, 9.0)).color(accent));
-                ui.add_space(4.0);
-                for line in e.say {
-                    ui.add(egui::Label::new(RichText::new(*line).font(face(Face::Mono, 12.0)).color(ink)).wrap());
-                    ui.add_space(2.0);
-                }
-                ui.add_space(12.0);
-                ui.label(RichText::new("GOOD TO KNOW").font(face(Face::Label, 9.0)).color(accent));
-                ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(e.know).color(muted).font(face(Face::Body, 13.0))).wrap());
-                ui.add_space(8.0);
-            });
-        });
-        if closed {
-            lock(&UI).explaining.retain(|open| *open != id);
-            crate::hud_dock::forget(&block);
+}
+
+/// One feature's explanation: what it does, what to say, what is good to know.
+fn explained(ui: &mut egui::Ui, e: &'static Explanation) {
+    let (accent, ink, muted) = (crate::hud_board::active_colour(), crate::holo::theme().ink(), crate::holo::theme().muted());
+    crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+        ui.add_space(4.0);
+        ui.label(RichText::new(e.title).font(face(Face::Head, 24.0)).color(ink));
+        ui.add_space(8.0);
+        ui.add(egui::Label::new(RichText::new(e.what).color(ink).font(face(Face::Body, 14.0))).wrap());
+        ui.add_space(14.0);
+        ui.label(RichText::new("WHAT TO SAY").font(face(Face::Label, 9.0)).color(accent));
+        ui.add_space(4.0);
+        for line in e.say {
+            ui.add(egui::Label::new(RichText::new(*line).font(face(Face::Mono, 12.0)).color(ink)).wrap());
+            ui.add_space(2.0);
         }
-    }
+        ui.add_space(12.0);
+        ui.label(RichText::new("GOOD TO KNOW").font(face(Face::Label, 9.0)).color(accent));
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(RichText::new(e.know).color(muted).font(face(Face::Body, 13.0))).wrap());
+        ui.add_space(8.0);
+    });
 }
 
 #[cfg(test)]

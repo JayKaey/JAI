@@ -45,6 +45,20 @@ fn rot_z(t: f32) -> M3 {
     [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]
 }
 
+const IDENTITY: M3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+/// `m` squared up into a pure turn again (a thousand small turns multiplied drift off one).
+fn orthonormal(m: M3) -> M3 {
+    let unit = |v: V3| {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+        [v[0] / l, v[1] / l, v[2] / l]
+    };
+    let x = unit(m[0]);
+    let d = x[0] * m[1][0] + x[1] * m[1][1] + x[2] * m[1][2];
+    let y = unit([m[1][0] - d * x[0], m[1][1] - d * x[1], m[1][2] - d * x[2]]);
+    [x, y, [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]]]
+}
+
 /// A point of the unit sphere (latitude, longitude; y is up).
 fn unit(lat: f32, lon: f32) -> V3 {
     [lat.cos() * lon.cos(), lat.sin(), lat.cos() * lon.sin()]
@@ -271,11 +285,11 @@ fn nearness(z: f32) -> f32 {
 }
 
 pub fn paint(p: &Painter, id: egui::Id, c: Pos2, r: f32, look: &CoreLook) {
-    paint_turned(p, id, c, r, look, 0.0, 0.0);
+    paint_turned(p, id, c, r, look, 0.0, &IDENTITY);
 }
 
-/// The sphere turned by hand: `yaw` about its axis, `pitch` towards the viewer (the core view).
-pub fn paint_turned(p: &Painter, id: egui::Id, c: Pos2, r: f32, look: &CoreLook, yaw: f32, pitch: f32) {
+/// The sphere turned: `yaw` about its own axis, then by `hand` in the view's axes (the core view).
+fn paint_turned(p: &Painter, id: egui::Id, c: Pos2, r: f32, look: &CoreLook, yaw: f32, hand: &M3) {
     let t = holo::theme();
     let alpha = look.alpha * (0.25 + 0.75 * look.wake);
     if alpha <= 0.003 || r < 4.0 {
@@ -288,7 +302,7 @@ pub fn paint_turned(p: &Painter, id: egui::Id, c: Pos2, r: f32, look: &CoreLook,
     let clock = look.clock;
     let mind = &*MIND;
     let view = View { centre: c, radius: r, focal: 3.4 };
-    let stance = mul(&rot_x(pitch), &mul(&stance(clock), &rot_y(yaw)));
+    let stance = mul(hand, &mul(&stance(clock), &rot_y(yaw)));
     let pace = 1.0 + 4.0 * look.busy;
     // Small, he is drawn with fewer wires: a corner orb is no place for six hundred of them.
     let detail = (r / 150.0).clamp(0.22, 1.0);
@@ -444,6 +458,172 @@ pub fn census() -> (usize, usize) {
     (MIND.wires.len(), MIND.pins.len())
 }
 
+// ------------------------------------------------------------------------ his files ----
+
+/// His source files and what uses what, read from `src/` when he was built (`build.rs`).
+mod graph {
+    include!(concat!(env!("OUT_DIR"), "/core_graph.rs"));
+}
+
+/// The links between his files, main.rs's bare `mod` lines left out (a star from the middle to
+/// every file would hide everything else).
+fn links() -> impl Iterator<Item = (usize, usize, u16)> {
+    let main = graph::CORE_FILES.iter().position(|(name, _)| *name == "main.rs");
+    graph::CORE_EDGES.iter().filter(move |(a, _, n)| !(Some(*a as usize) == main && *n <= 1)).map(|&(a, b, n)| (a as usize, b as usize, n))
+}
+
+/// His files as points in space, laid out once: what uses what pulls together, the rest push
+/// apart (a force layout, the same every time), scaled into the unit sphere.
+static FILES: LazyLock<Vec<V3>> = LazyLock::new(|| layout(graph::CORE_FILES.len(), &links().collect::<Vec<_>>()));
+
+fn layout(n: usize, edges: &[(usize, usize, u16)]) -> Vec<V3> {
+    let sub = |a: V3, b: V3| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let len = |v: V3| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    // (ForceAtlas2's way: a file with many links pushes and is held harder, so the busy ones
+    // stand apart, each with its own files round it, instead of all in one knot.)
+    let mut weight = vec![1.0f32; n];
+    for &(a, b, _) in edges {
+        weight[a] += 1.0;
+        weight[b] += 1.0;
+    }
+    // (Started golden-angle apart on a sphere: there is no luck in it.)
+    let mut at: Vec<V3> = (0..n)
+        .map(|i| {
+            let y = 1.0 - 2.0 * (i as f32 + 0.5) / n as f32;
+            let (ring, lon) = ((1.0 - y * y).sqrt(), i as f32 * 2.399_963);
+            [ring * lon.cos(), y, ring * lon.sin()]
+        })
+        .collect();
+    const STEPS: usize = 300;
+    for step in 0..STEPS {
+        let mut push = vec![[0.0f32; 3]; n];
+        for i in 0..n {
+            for j in i + 1..n {
+                let d = sub(at[i], at[j]);
+                let f = 0.0004 * weight[i] * weight[j] / len(d).powi(2).max(1e-4);
+                for c in 0..3 {
+                    push[i][c] += d[c] * f;
+                    push[j][c] -= d[c] * f;
+                }
+            }
+        }
+        for &(a, b, _) in edges {
+            let d = sub(at[b], at[a]);
+            for c in 0..3 {
+                push[a][c] += d[c];
+                push[b][c] -= d[c];
+            }
+        }
+        let heat = 0.08 * (1.0 - step as f32 / STEPS as f32) + 0.002;
+        for ((q, f), w) in at.iter_mut().zip(&push).zip(&weight) {
+            let f = [f[0] - q[0] * 0.05 * w, f[1] - q[1] * 0.05 * w, f[2] - q[2] * 0.05 * w];
+            let s = len(f).min(heat) / len(f).max(1e-6);
+            for c in 0..3 {
+                q[c] += f[c] * s;
+            }
+        }
+    }
+    // Centred, and scaled so nine in ten stand inside 0.85; the few far out wait on a rim.
+    let mid = at.iter().fold([0.0; 3], |m, q| [m[0] + q[0] / n as f32, m[1] + q[1] / n as f32, m[2] + q[2] / n as f32]);
+    let mut far: Vec<f32> = at.iter().map(|q| len(sub(*q, mid))).collect();
+    far.sort_by(f32::total_cmp);
+    let scale = 0.85 / far.get(n * 9 / 10).copied().unwrap_or(1.0).max(1e-6);
+    let mut at: Vec<V3> = at
+        .iter()
+        .map(|q| {
+            let d = sub(*q, mid).map(|x| x * scale);
+            let out = (len(d) / 1.1).max(1.0);
+            d.map(|x| x / out)
+        })
+        .collect();
+    // Each then moved most of the way to its rank's radius in an evenly filled ball, its
+    // direction kept: the busy middle opens up into points one can tell apart (it was a knot).
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|a, b| len(at[*a]).total_cmp(&len(at[*b])));
+    for (rank, &i) in order.iter().enumerate() {
+        let r = len(at[i]).max(1e-6);
+        let even = 0.95 * ((rank as f32 + 0.5) / n as f32).cbrt();
+        at[i] = at[i].map(|x| x * (r + (even - r) * 0.6) / r);
+    }
+    at
+}
+
+/// The simple core: his files as points, joined where one uses another, turned by `turn`.
+/// A point's size is how much of him it is (its lines); the parts at work (`active`) glow in
+/// the accent. Returns the file nearest `pointer`, within reach.
+fn paint_files(p: &Painter, id: egui::Id, c: Pos2, r: f32, look: &CoreLook, turn: &M3, active: &[(&str, usize, f32)], pointer: Option<Pos2>) -> Option<usize> {
+    let t = holo::theme();
+    let alpha = look.alpha * (0.25 + 0.75 * look.wake);
+    let files = graph::CORE_FILES;
+    let view = View { centre: c, radius: r, focal: 3.4 };
+    let at: Vec<(Pos2, f32)> = FILES.iter().map(|q| view.project(apply(turn, *q))).collect();
+    let working = |i: usize| active.iter().find(|(name, ..)| *name == files[i].0).map_or(0.0, |(.., fresh)| *fresh);
+    let w = px(p);
+    let mut light: Light = crate::holo_core::glow(p, id, c, r * 1.66, look.crisp);
+    light.spill = 0.05 * alpha;
+    // (Faint and without bloom, or two thousand lines glow into one knot that hides the points;
+    // a link of a part at work is tinted.)
+    let mut lines = Light::new(p);
+    for (a, b, n) in links() {
+        let ((pa, za), (pb, zb)) = (at[a], at[b]);
+        let near = nearness((za + zb) * 0.5);
+        let hot = working(a).max(working(b));
+        let strength = (0.025 + 0.05 * near) * (1.0 + 0.15 * (n as f32).ln()) + 0.05 * hot;
+        lines.seg(pa, pb, w, lit(mix(mix(t.deep(), t.ink(), near), t.accent(), hot), strength * alpha));
+    }
+    lines.paint(p);
+    let mut hovered = None;
+    let mut best = 14.0f32;
+    for (i, &(q, z)) in at.iter().enumerate() {
+        let near = nearness(z);
+        let hot = working(i);
+        let size = (0.9 + (files[i].1 as f32).sqrt() * 0.06) * (0.6 + 0.6 * near) * (r / 200.0).clamp(0.7, 1.6);
+        light.spark(q, size + 2.0 * hot, lit(mix(mix(t.deep(), t.ink(), near), t.accent(), hot), ((0.35 + 0.65 * near) + hot).min(1.0) * alpha));
+        if let Some(d) = pointer.map(|m| m.distance(q)).filter(|d| *d < best) {
+            (best, hovered) = (d, Some(i));
+        }
+    }
+    light.paint(p);
+    hovered
+}
+
+/// A file's point on screen in the view turned by `turn` (where the core view's leaders start).
+fn file_on_screen(i: usize, turn: &M3, c: Pos2, r: f32) -> Pos2 {
+    View { centre: c, radius: r, focal: 3.4 }.project(apply(turn, FILES[i])).0
+}
+
+/// The core view's versions: the mind (his sphere of circuitry), his files (the simple one:
+/// every file a point, joined where one uses another) and the rings (the simple core, large).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum CoreKind {
+    #[default]
+    Mind,
+    Files,
+    Rings,
+}
+
+impl CoreKind {
+    pub const ALL: [CoreKind; 3] = [CoreKind::Mind, CoreKind::Files, CoreKind::Rings];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CoreKind::Mind => "mind",
+            CoreKind::Files => "files",
+            CoreKind::Rings => "rings",
+        }
+    }
+
+    /// "files", "network", "dots", "the simple one", "the real one", "Ringe".
+    pub fn of_word(word: &str) -> Option<Self> {
+        match word.trim().to_lowercase().as_str() {
+            "mind" | "real" | "full" | "complex" | "circuit" | "circuitry" | "sphere" | "normal" | "echt" | "echten" | "komplex" => Some(CoreKind::Mind),
+            "files" | "file" | "network" | "net" | "graph" | "dots" | "nodes" | "simple" | "simpler" | "dateien" | "netz" | "netzwerk" | "punkte" | "einfach" | "einfache" | "einfacher" | "einfachen" => Some(CoreKind::Files),
+            "rings" | "ring" | "instrument" | "ringe" => Some(CoreKind::Rings),
+            _ => None,
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------- the view ----
 
 pub const MIN_ZOOM: f32 = 0.5;
@@ -459,22 +639,29 @@ pub enum CoreCommand {
     ZoomBy(f32),
     /// How fast it turns by itself, × factor (0 holds it still).
     Spin(f32),
+    /// Which version of him it shows.
+    Kind(CoreKind),
 }
 
-/// The core, large: turned by hand, zoomed, with what each layer does written beside it.
+/// The core, large: turned by hand from every side, zoomed, with what each layer does written
+/// beside it; as his mind, his files or his rings (`CoreKind`).
 pub struct MindView {
+    /// How far it has turned by itself, about its own axis.
     yaw: f32,
-    pitch: f32,
+    /// How the hand has turned it, in the view's own axes: a trackball, so it goes all the way
+    /// round any way (Sir, 2026-11-26: "from every angle without getting stopped").
+    hand: M3,
     /// How fast the hand left it turning (radians a second), dying away.
     drift: Vec2,
     zoom: f32,
     zoom_target: f32,
     spin: f32,
+    pub kind: CoreKind,
 }
 
 impl Default for MindView {
     fn default() -> Self {
-        Self { yaw: 0.0, pitch: 0.0, drift: Vec2::ZERO, zoom: 1.0, zoom_target: 1.0, spin: 1.0 }
+        Self { yaw: 0.0, hand: IDENTITY, drift: Vec2::ZERO, zoom: 1.0, zoom_target: 1.0, spin: 1.0, kind: CoreKind::default() }
     }
 }
 
@@ -483,9 +670,9 @@ impl MindView {
         self.zoom_target = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
-    /// (yaw, pitch) it is turned by.
+    /// (yaw, pitch) it is turned by: about the upright, and how far its front leans up or down.
     pub fn orientation(&self) -> (f32, f32) {
-        (self.yaw, self.pitch)
+        (self.yaw + self.hand[0][2].atan2(self.hand[2][2]), (-self.hand[1][2]).clamp(-1.0, 1.0).asin())
     }
 
     pub fn apply(&mut self, cmd: CoreCommand) {
@@ -494,29 +681,40 @@ impl MindView {
             CoreCommand::Zoom(z) => self.set_zoom(z),
             CoreCommand::ZoomBy(f) => self.set_zoom(self.zoom_target * f),
             CoreCommand::Spin(f) => self.spin = (if self.spin <= 0.0 { 1.0 } else { self.spin } * f).clamp(0.0, 6.0),
+            CoreCommand::Kind(kind) => self.kind = kind,
         }
+    }
+
+    /// The hand turned it by `turn` radians (across, down) in the view's own axes.
+    fn turn_by(&mut self, turn: Vec2) {
+        self.hand = orthonormal(mul(&mul(&rot_y(turn.x), &rot_x(turn.y)), &self.hand));
     }
 
     /// The hand moved by `d` points over `dt` seconds.
     pub fn drag(&mut self, d: Vec2, dt: f32) {
-        let turn = vec2(d.x * 0.008, d.y * 0.008);
-        self.yaw += turn.x;
-        self.pitch = (self.pitch + turn.y).clamp(-1.2, 1.2);
+        let turn = d * 0.008;
+        self.turn_by(turn);
         self.drift = turn / dt.max(1e-3);
+    }
+
+    /// How it is turned now: by hand, then a little from above, then about its own axis.
+    fn turn(&self, clock: f32) -> M3 {
+        mul(&self.hand, &mul(&stance(clock), &rot_y(self.yaw)))
     }
 
     /// Where a point of the sphere (in radii; +z towards the viewer) lands for a view at
     /// `centre` of `radius`, turned as it is now.
     pub fn project(&self, p: [f32; 3], centre: Pos2, radius: f32) -> (Pos2, f32) {
-        let turn = mul(&rot_x(self.pitch), &mul(&stance(0.0), &rot_y(self.yaw)));
-        View { centre, radius, focal: 3.4 }.project(apply(&turn, p))
+        View { centre, radius, focal: 3.4 }.project(apply(&self.turn(0.0), p))
     }
 
     /// One frame. `held`: the pointer is over it, and it stands still to be read.
     pub fn step(&mut self, dt: f32, held: bool) {
         self.zoom = crate::holo_core::follow(self.zoom, self.zoom_target, 9.0, dt);
-        self.yaw += (self.drift.x + if held { 0.0 } else { 0.10 * self.spin }) * dt;
-        self.pitch = (self.pitch + self.drift.y * dt).clamp(-1.2, 1.2);
+        self.yaw += if held { 0.0 } else { 0.10 * self.spin } * dt;
+        if self.drift.length() > 1e-4 {
+            self.turn_by(self.drift * dt);
+        }
         // (Let go, it turns on a little and comes to rest: a sixth of a turn at most.)
         self.drift = (self.drift * (-5.0 * dt).exp()).clamp(vec2(-5.0, -5.0), vec2(5.0, 5.0));
     }
@@ -542,20 +740,55 @@ impl MindView {
             }
         }
         if response.double_clicked() {
-            *self = Self { spin: self.spin, ..Self::default() };
+            *self = Self { spin: self.spin, kind: self.kind, ..Self::default() };
         }
         self.step(dt, response.hovered() && !response.dragged());
         let p = ui.painter_at(rect);
         let centre = rect.center();
         let radius = rect.width().min(rect.height()) * 0.27 * self.zoom;
-        paint_turned(&p, ui.id().with("holo_mind_view"), centre, radius, &CoreLook { word: "", ..*look }, self.yaw, self.pitch);
+        let id = ui.id().with("holo_mind_view");
+        let quiet = CoreLook { word: "", ..*look };
+        let turn = self.turn(look.clock);
+        let mut hovered = None;
+        match self.kind {
+            CoreKind::Mind => paint_turned(&p, id, centre, radius, &quiet, self.yaw, &self.hand),
+            CoreKind::Files => hovered = paint_files(&p, id, centre, radius, &quiet, &turn, active, response.hover_pos()),
+            CoreKind::Rings => crate::holo_core::paint(&p, id, crate::holo_core::CoreStyle::Simple, centre, radius * 1.2, &quiet),
+        }
 
-        // What it is, top left.
-        let (wires, pins) = census();
+        // What it is, top left, and its versions as keys.
         let at = rect.left_top() + vec2(4.0, 6.0);
-        holo::text(&p, at, Align2::LEFT_TOP, Face::Label, "Core // mind", 12.0, a(t.ink(), look.alpha));
-        holo::text(&p, at + vec2(0.0, 20.0), Align2::LEFT_TOP, Face::Mono, &format!("{wires} TRACES // {pins} PINS // {SHELLS} LAYERS"), 10.5, a(t.muted(), look.alpha));
-        holo::text(&p, at + vec2(0.0, 36.0), Align2::LEFT_TOP, Face::Mono, "DRAG TO TURN // WHEEL TO ZOOM // DOUBLE CLICK TO RESET", 10.5, a(t.faint(), look.alpha));
+        let readout = match self.kind {
+            CoreKind::Mind => {
+                let (wires, pins) = census();
+                format!("{wires} TRACES // {pins} PINS // {SHELLS} LAYERS")
+            }
+            CoreKind::Files => format!("{} FILES // {} LINKS // {} LINES", graph::CORE_FILES.len(), links().count(), graph::CORE_FILES.iter().map(|(_, n)| *n as u64).sum::<u64>()),
+            CoreKind::Rings => "HIS VOICE // YOUR VOICE // THE CLOCK".to_string(),
+        };
+        // (The rings are flat: they zoom, but there is nothing to turn.)
+        let hint = if self.kind == CoreKind::Rings { "WHEEL TO ZOOM // DOUBLE CLICK TO RESET" } else { "DRAG TO TURN // WHEEL TO ZOOM // DOUBLE CLICK TO RESET" };
+        holo::text(&p, at, Align2::LEFT_TOP, Face::Label, &format!("Core // {}", self.kind.name()), 12.0, a(t.ink(), look.alpha));
+        holo::text(&p, at + vec2(0.0, 20.0), Align2::LEFT_TOP, Face::Mono, &readout, 10.5, a(t.muted(), look.alpha));
+        holo::text(&p, at + vec2(0.0, 36.0), Align2::LEFT_TOP, Face::Mono, hint, 10.5, a(t.faint(), look.alpha));
+        let mut x = at.x;
+        for kind in CoreKind::ALL {
+            let label = kind.name().to_uppercase();
+            let key = Rect::from_min_size(pos2(x, at.y + 56.0), vec2(crate::holo_kit::key_width(&p, &label), 22.0));
+            let clicked = ui.interact(key, id.with(kind.name()), egui::Sense::click());
+            crate::holo_kit::key(&p, key, &label, if clicked.hovered() { 1.0 } else { 0.0 }, clicked.is_pointer_button_down_on(), self.kind == kind, look.alpha);
+            if clicked.clicked() {
+                self.kind = kind;
+            }
+            x = key.right() + 6.0;
+        }
+        // The file under the pointer, named.
+        if let Some(i) = hovered {
+            let (name, lines) = graph::CORE_FILES[i];
+            let joined = links().filter(|(a, b, _)| *a == i || *b == i).count();
+            let from = file_on_screen(i, &turn, centre, radius);
+            crate::holo_kit::callout(&p, from, from + vec2(40.0, -36.0), &format!("{} // {lines} LINES // {joined} LINKS", name.trim_end_matches(".rs").replace('_', " ")), look.alpha);
+        }
 
         // The layers, inside out, each with how hard it works: bottom left.
         let mut y = rect.bottom() - 6.0 - SHELLS as f32 * 22.0;
@@ -567,11 +800,13 @@ impl MindView {
             y += 22.0;
         }
 
-        // The parts at work, each on a leader from its layer: right.
+        // The parts at work, each on a leader from its layer (from its own point among his
+        // files): right.
         for (k, (name, layer, fresh)) in active.iter().take(9).enumerate() {
             let shell = SHELL[(*layer).min(SHELLS - 1)].radius * radius;
             let angle = -0.9 + k as f32 * 0.23;
-            let from = pos2(centre.x + shell * angle.cos(), centre.y + shell * angle.sin());
+            let file = graph::CORE_FILES.iter().position(|(file, _)| file == name).filter(|_| self.kind == CoreKind::Files);
+            let from = file.map_or(pos2(centre.x + shell * angle.cos(), centre.y + shell * angle.sin()), |i| file_on_screen(i, &turn, centre, radius));
             let to = pos2((centre.x + radius * 1.75).min(rect.right() - 150.0), centre.y - radius * 0.95 + k as f32 * 24.0);
             let label = name.trim_end_matches(".rs").replace('_', " ");
             crate::holo_kit::callout(&p, from, to, &label, (0.25 + 0.75 * fresh) * look.alpha);
@@ -590,6 +825,54 @@ impl MindView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sir, 2026-11-26: "look at the core from every angle without getting stopped": dragged up
+    /// it goes on over the top to its back, and upside down a drag right still turns what faces
+    /// him to the right.
+    #[test]
+    fn the_core_turns_all_the_way_round_by_hand() {
+        let mut view = MindView::default();
+        for _ in 0..4 {
+            view.drag(vec2(0.0, -100.0), 1.0 / 60.0);
+        }
+        let front = apply(&view.hand, [0.0, 0.0, 1.0]);
+        assert!(front[2] < -0.9, "over the top to its back: {front:?}");
+        let facing = view.hand[2];
+        view.drag(vec2(10.0, 0.0), 1.0 / 60.0);
+        assert!(apply(&view.hand, facing)[0] > 0.05, "a drag right moves it right, upside down too");
+        for k in 0..1000 {
+            view.drag(vec2((k % 7) as f32, (k % 5) as f32 - 2.0), 1.0 / 60.0);
+        }
+        for row in view.hand {
+            let length = (row[0] * row[0] + row[1] * row[1] + row[2] * row[2]).sqrt();
+            assert!((length - 1.0).abs() < 1e-3, "still a pure turn after a thousand: {:?}", view.hand);
+        }
+    }
+
+    /// The simple core: every file of his a point of its own inside the sphere, the ones that
+    /// use each other nearer together than any two.
+    #[test]
+    fn his_files_stand_apart_inside_the_sphere() {
+        let n = graph::CORE_FILES.len();
+        assert!(n > 100 && links().count() > 500, "{n} files, {} links", links().count());
+        let at = &*FILES;
+        let dist = |a: V3, b: V3| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+        assert!(at.iter().all(|q| dist(*q, [0.0; 3]) <= 1.1 + 1e-4));
+        let (mut on_top, mut all, mut pairs) = (0, 0.0, 0);
+        for i in 0..n {
+            for j in i + 1..n {
+                let d = dist(at[i], at[j]);
+                on_top += usize::from(d < 0.01);
+                all += d;
+                pairs += 1;
+            }
+        }
+        assert!(on_top < n / 20, "{on_top} pairs of files on one spot");
+        let linked = links().map(|(a, b, _)| dist(at[a], at[b])).sum::<f32>() / links().count() as f32;
+        assert!(linked < 0.8 * all / pairs as f32, "linked {linked} vs any two {}", all / pairs as f32);
+        assert_eq!(CoreKind::of_word("simpler"), Some(CoreKind::Files));
+        assert_eq!(CoreKind::of_word("Ringe"), Some(CoreKind::Rings));
+    }
 
     #[test]
     fn the_mind_is_the_same_every_time_and_every_wire_lies_on_its_shell() {

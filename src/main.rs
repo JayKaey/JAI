@@ -1155,6 +1155,9 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
             return Started::Done(ExitCode::FAILURE);
         }
     };
+    if memory.heal_address(cfg.interface.address.as_deref()) {
+        info!("[MEM] A form of address the settings never took (a misheard \"call me …\") is back to Sir.");
+    }
     let skills = match skills::SkillManager::open(&cfg.memory_db_path, &cfg.skills_dir) {
         Ok(s) => s,
         Err(e) => {
@@ -1202,9 +1205,9 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     appindex::start();
     file_ops::start();
     let controls = Arc::new(ears::AudioControls::new(&cfg));
-    if cli.no_mic {
+    if cli.no_mic || cfg.interface.start_muted {
         controls.mic_enabled.store(false, std::sync::atomic::Ordering::Release);
-        info!("[MIC] Started with the microphone muted (--no-mic).");
+        info!("[MIC] Started with the microphone muted ({}).", if cli.no_mic { "--no-mic" } else { "Start muted" });
     }
     if cli.live_test || cli.silent {
         // The self-test clicks the microphone's switch; what is said in the room meanwhile

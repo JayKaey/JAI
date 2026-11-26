@@ -473,11 +473,13 @@ pub enum Earcon {
     Alert,
     /// A block leaves the board: the shimmer, falling.
     Dismiss,
+    /// An alarm rings: up the chord, quick; played again and again until he stops it.
+    Alarm,
 }
 
 impl Earcon {
     /// Every cue, for the sound check.
-    pub const ALL: [Earcon; 7] = [Earcon::ReportChime, Earcon::Confirm, Earcon::PowerDown, Earcon::Materialize, Earcon::Spotlight, Earcon::Alert, Earcon::Dismiss];
+    pub const ALL: [Earcon; 8] = [Earcon::ReportChime, Earcon::Confirm, Earcon::PowerDown, Earcon::Materialize, Earcon::Spotlight, Earcon::Alert, Earcon::Dismiss, Earcon::Alarm];
 }
 
 /// A sine gliding from `from` to `to` Hz over the whole of `out[first..]`, with its own envelope
@@ -534,6 +536,7 @@ pub fn earcon(kind: Earcon, rate: u32) -> Vec<f32> {
         Earcon::Spotlight => 0.3,
         Earcon::Alert => 0.34,
         Earcon::Dismiss => 0.18,
+        Earcon::Alarm => 0.46,
     };
     let mut out = vec![0.0f32; (r * secs) as usize];
     match kind {
@@ -573,6 +576,14 @@ pub fn earcon(kind: Earcon, rate: u32) -> Vec<f32> {
         Earcon::Dismiss => {
             note(&mut out, r, 0.0, D6, 0.05, 34.0);
             note(&mut out, r, 0.07, A5, 0.055, 24.0);
+        }
+        // Time to get up: up the chord twice, quick and bright.
+        Earcon::Alarm => {
+            for start in [0.0, 0.21] {
+                note(&mut out, r, start, D5, 0.06, 22.0);
+                note(&mut out, r, start + 0.06, A5, 0.06, 22.0);
+                note(&mut out, r, start + 0.12, D6, 0.065, 18.0);
+            }
         }
     }
     let fade = (r * 0.03) as usize;

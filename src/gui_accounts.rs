@@ -135,7 +135,9 @@ fn summary(a: &Account) -> String {
     let may = format!("their PC: {}  ·  yours: {}", level_word(&a.own), level_word(&a.here));
     let state = a.paused().map_or(may, |until| format!("paused until {until}"));
     let seen = a.devices.first().map(|d| format!("  ·  seen {}", ago(d.seen))).unwrap_or_default();
-    format!("{}  ·  {state}{seen}", a.name)
+    // (Which J.A.I. their PC runs, at a glance: is it the newest?)
+    let version = a.devices.iter().find(|d| d.kind == "pc" && !d.version.is_empty()).map(|d| format!("  ·  J.A.I. {}", d.version)).unwrap_or_default();
+    format!("{}  ·  {state}{seen}{version}", a.name)
 }
 
 fn body(ui: &mut Ui) {
@@ -301,7 +303,7 @@ fn detail(ui: &mut Ui, view: &mut View, a: &Account, remote: Option<&Remote>) {
             ui.label(label(&format!("{} · {}", d.kind, d.label), 8.5));
             let version = match d.version.as_str() {
                 "" => String::new(),
-                v if v == crate::fleet::BUILD => format!("  ·  J.A.I. {v}, as on this PC"),
+                v if v == crate::fleet::release() => format!("  ·  J.A.I. {v}, as on this PC"),
                 v => format!("  ·  J.A.I. {v}"),
             };
             let seen = if accounts::now() - d.seen < crate::fleet::ONLINE_WITHIN { "online now".to_string() } else { format!("seen {}", ago(d.seen)) };

@@ -46,8 +46,11 @@ const SNAP: &[usize] = &[62]; // finger snapping
 const KNOCK: &[usize] = &[354, 359, 360, 468]; // door, knock, tap (at a door), whack
 const TYPING: &[usize] = &[384, 385, 386]; // typing, typewriter, computer keyboard
 const MUSIC: &[usize] = &[137];
+const TICK: &[usize] = &[404, 406, 407, 408]; // mechanisms, clock, tick, tick-tock
 const SHATTER: usize = 443;
 const SPEECH: usize = 0;
+const COUGH: usize = 47;
+const SNEEZE: usize = 49;
 /// What a sound that lasts may be, and how sure the model must be of it.
 const LASTING: &[(Sound, &[usize], f32)] = &[
     (Sound::Doorbell, &[355, 356], 0.2),
@@ -71,13 +74,15 @@ pub enum Sound {
     Dog,
     Glass,
     Whistle,
+    /// Sir sneezed: "Bless you, Sir." (Sir, 2026-11-26).
+    Sneeze,
     /// A voice that is clearly not Sir's.
     SomeoneElse,
 }
 
 impl Sound {
     /// Every one, in the order the protocol window offers them.
-    pub const ALL: [Sound; 11] = [Sound::Claps(2), Sound::Claps(3), Sound::Snap, Sound::Knock, Sound::Doorbell, Sound::Phone, Sound::Alarm, Sound::Dog, Sound::Glass, Sound::Whistle, Sound::SomeoneElse];
+    pub const ALL: [Sound; 12] = [Sound::Claps(2), Sound::Claps(3), Sound::Snap, Sound::Knock, Sound::Doorbell, Sound::Phone, Sound::Alarm, Sound::Dog, Sound::Glass, Sound::Whistle, Sound::Sneeze, Sound::SomeoneElse];
 
     /// How a rule or a protocol's line says it ("whenever I clap twice").
     pub fn words(self) -> &'static str {
@@ -92,6 +97,7 @@ impl Sound {
             Sound::Dog => "a dog barks",
             Sound::Glass => "glass breaks",
             Sound::Whistle => "I whistle",
+            Sound::Sneeze => "I sneeze",
             Sound::SomeoneElse => "someone else talks",
         }
     }
@@ -109,6 +115,7 @@ impl Sound {
             Sound::Dog => "a dog barking",
             Sound::Glass => "glass breaking",
             Sound::Whistle => "whistling",
+            Sound::Sneeze => "a sneeze",
             Sound::SomeoneElse => "someone else talking",
         }
     }
@@ -126,6 +133,7 @@ impl Sound {
             Sound::Dog => "Sir, a dog is barking.",
             Sound::Glass => "Sir, I heard glass breaking.",
             Sound::Whistle => "You whistled, Sir.",
+            Sound::Sneeze => "Bless you, Sir.",
             Sound::SomeoneElse => "Sir, someone else is talking.",
         }
     }
@@ -143,6 +151,7 @@ impl Sound {
             Sound::Dog => "dog",
             Sound::Glass => "glass",
             Sound::Whistle => "whistle",
+            Sound::Sneeze => "sneeze",
             Sound::SomeoneElse => "someone_else",
         }
     }
@@ -174,6 +183,7 @@ static SAID: LazyLock<Vec<(Sound, Regex)>> = LazyLock::new(|| {
         (Sound::Dog, r"(?:a\s+|the\s+|my\s+)?dogs?\s+(?:barks|bark|is\s+barking|barking)|barking|(?:ein|der|mein)\s+hund\s+bellt|du\s+(?:einen\s+)?hund\s+(?:bellen\s+)?hörst".into()),
         (Sound::Glass, r"(?:some\s+|a\s+)?glass\s+(?:breaks|shatters|breaking|shattering)|(?:breaking|shattering)\s+glass|(?:ein\s+)?glas\s+(?:zerbricht|zerspringt|kaputt\s+geht)".into()),
         (Sound::Whistle, r"i\s+whistle|(?:me\s+|someone\s+)?whistl(?:e|es|ing)|ich\s+pfeife".into()),
+        (Sound::Sneeze, r"(?:i\s+|someone\s+|somebody\s+|a\s+)?sneez(?:e|es|ing)|(?:ich\s+|jemand\s+)?nies(?:e|t)".into()),
         (Sound::SomeoneElse, r"(?:someone|somebody|anyone|anybody)\s+(?:else|other\s+than\s+me)\s+(?:talks|speaks|is\s+talking|is\s+speaking)|(?:another\s+(?:person|voice)|someone\s+else|somebody\s+else|a\s+stranger)(?:\s+(?:talking|speaking|talks|speaks))?|(?:a\s+)?stranger\s+(?:talks|speaks)|jemand\s+(?:anderes|anders|fremdes)\s+(?:spricht|redet)|du\s+(?:eine\s+)?(?:fremde|andere)\s+stimme\s+hörst".into()),
     ];
     table.into_iter().map(|(sound, pattern)| (sound, Regex::new(&format!(r"^{HEAR}(?:{pattern})(?:\s+(?:then|dann|so))?(?:\s+(?P<rest>.+))?$")).expect("sound pattern"))).collect()
@@ -375,10 +385,14 @@ fn judge_by(event: AcousticEvent, scores: Option<&[f32]>, prints: &[Print], taug
             } else if knock > clap.max(0.2) {
                 Some(Sound::Knock)
             } else {
-                (!knows_his_claps || clap >= 0.3).then_some(Sound::Claps(count as u8))
+                // A run counts only when the model hears clapping in it, more than ticking: while it
+                // was unsure the radar's run held, and two ticks of a clock, a keyboard or a mouse
+                // made a double clap (Sir, 2026-11-26; his real claps score 24-58 %, those ticks 0-5 %).
+                (clap >= if knows_his_claps { 0.3 } else { 0.2 } && clap > of(TICK)).then_some(Sound::Claps(count as u8))
             }
         }
         AcousticEvent::Knock { .. } => (typing <= knock.max(0.1) && !(music > 0.5 && knock < 0.1)).then_some(Sound::Knock),
+        AcousticEvent::Single | AcousticEvent::Sound if sneezed(p) => Some(Sound::Sneeze),
         AcousticEvent::Single => {
             if snap >= 0.15 && snap > clap {
                 Some(Sound::Snap)
@@ -490,8 +504,21 @@ pub fn prints(pcm: &[f32]) -> Vec<Print> {
 fn drowned(scores: Option<&[f32]>) -> bool {
     scores.filter(|p| p.len() >= CLASSES).is_some_and(|p| {
         let of = |ids: &[usize]| ids.iter().map(|&i| p[i]).fold(0.0f32, f32::max);
-        of(TYPING) > 0.35 || p[SPEECH] > 0.5 || of(MUSIC) > 0.7
+        of(TYPING) > 0.35 || of(TICK) > 0.3 || p[SPEECH] > 0.5 || of(MUSIC) > 0.7
     })
+}
+
+/// A sneeze, by the model's scores: sure enough of it, and surer than of a cough or of speech
+/// (what such models take a sneeze for most; they are weakest on these sounds).
+pub fn sneezed(p: &[f32]) -> bool {
+    p.len() >= CLASSES && p[SNEEZE] >= 0.3 && p[SNEEZE] > p[COUGH] && p[SNEEZE] > p[SPEECH]
+}
+
+/// Whisper's spelling of a sneeze ("Achoo!", "Hatschi!", "ah-choo"): the whole of what it heard.
+pub fn sneeze_word(text: &str) -> bool {
+    static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:(?:a|ha|ah)+h?(?:t?ch|tsch|tsh)(?:o+|u+|i+|ie)+)+$").expect("sneeze word"));
+    let squashed: String = text.to_lowercase().chars().filter(|c| c.is_alphabetic()).collect();
+    WORD.is_match(&squashed)
 }
 
 fn distance(a: &[f32], b: &[f32]) -> f32 {
@@ -826,8 +853,9 @@ mod tests {
         let snaps_two = prints(&room_with(2400, &[his_at(1000, 7, 0.08, SNAPPED, 8.0), his_at(1400, 8, 0.06, SNAPPED, 8.0)].concat()));
         assert_eq!(judge_by(claps, Some(&scores_with(&[])), &snaps_two, &taught), Some(Sound::Snap), "two of his snaps close together");
         let clicks = prints(&room_with(2400, &[(1000, 7, 0.1, (200.0, 1200.0), 20.0), (1400, 8, 0.1, (200.0, 1200.0), 20.0)]));
-        assert_eq!(judge_by(claps, Some(&scores_with(&[])), &clicks, &taught), None, "untaught he would have taken them");
-        assert_eq!(judge_by(claps, Some(&scores_with(&[])), &clicks, &[]), Some(Sound::Claps(2)));
+        assert_eq!(judge_by(claps, Some(&scores_with(&[])), &clicks, &taught), None, "two clicks are no claps of his");
+        assert_eq!(judge_by(claps, Some(&scores_with(&[])), &clicks, &[]), None, "nor anyone's: the model hears no clapping");
+        assert_eq!(judge_by(claps, Some(&scores_with(&[(407, 0.5)])), &his_two, &taught), None, "a clock ticking over it");
         assert_eq!(judge_by(claps, Some(&scores_with(&[(386, 0.6)])), &his_two, &taught), None, "typing over it");
         assert_eq!(judge_by(AcousticEvent::Single, None, &his(3, 0.2, CLAPPED, 40.0), &taught), None, "a lone clap of his is no gesture");
         // The radar opens to the softest of his, and to his echo.
@@ -856,7 +884,26 @@ mod tests {
         assert_eq!(judge(claps, Some(&scores_with(&[(63, 0.6)])), &[]), Some(Sound::Claps(2)));
         assert_eq!(judge(claps, Some(&scores_with(&[(63, 0.1), (62, 0.4)])), &[]), Some(Sound::Snap));
         assert_eq!(judge(claps, Some(&scores_with(&[(386, 0.5), (63, 0.05)])), &[]), None, "typing");
-        assert_eq!(judge(claps, Some(&scores_with(&[])), &[]), Some(Sound::Claps(2)), "unsure: the radar holds");
+        // Sir, 2026-11-26: "the clapping feature triggers very often even when i don't clap". As
+        // his log had it: two ticks the model was unsure of made a double clap.
+        assert_eq!(judge(claps, Some(&scores_with(&[])), &[]), None, "unsure: no clap");
+        assert_eq!(judge(claps, Some(&scores_with(&[(408, 0.39), (407, 0.37), (386, 0.11)])), &[]), None, "tick-tock");
+        assert_eq!(judge(claps, Some(&scores_with(&[(504, 0.3), (63, 0.12)])), &[]), None, "a sound effect, a little like clapping");
+        assert_eq!(judge(claps, Some(&scores_with(&[(504, 0.37), (63, 0.26), (467, 0.25)])), &[]), Some(Sound::Claps(2)), "his real claps, as the log had them");
+        assert_eq!(judge(claps, Some(&scores_with(&[(63, 0.3), (407, 0.45)])), &[]), None, "ticking louder than the clapping");
+        // A sneeze: "Bless you" (the model surer of it than of a cough or of words).
+        for ev in [AcousticEvent::Single, AcousticEvent::Sound] {
+            assert_eq!(judge(ev, Some(&scores_with(&[(SNEEZE, 0.6), (SPEECH, 0.2)])), &[]), Some(Sound::Sneeze), "{ev:?}");
+            assert_eq!(judge(ev, Some(&scores_with(&[(SNEEZE, 0.35), (COUGH, 0.5)])), &[]), None, "a cough");
+            assert_eq!(judge(ev, Some(&scores_with(&[(SNEEZE, 0.3), (SPEECH, 0.7)])), &[]), None, "talk");
+        }
+        assert_eq!(judge(AcousticEvent::Single, Some(&scores_with(&[(SNEEZE, 0.2)])), &[]), None, "unsure");
+        for word in ["Achoo!", "Ah-choo.", "Hatschi!", "Haaatschi", "atchoo", "Achoo! Achoo!"] {
+            assert!(sneeze_word(word), "{word}");
+        }
+        for word in ["Atchison", "chill", "Hochzeit", "achieve", "", "Bless you", "Aachen"] {
+            assert!(!sneeze_word(word), "{word}");
+        }
         assert_eq!(judge(knocks, Some(&scores_with(&[(359, 0.5)])), &[]), Some(Sound::Knock));
         assert_eq!(judge(knocks, Some(&scores_with(&[(384, 0.6), (359, 0.1)])), &[]), None, "typing");
         assert_eq!(judge(knocks, Some(&scores_with(&[(137, 0.8)])), &[]), None, "a beat");

@@ -6,7 +6,7 @@
 //! per-window state (time, the n-body scene, the ripple tank, trails) is kept here.
 
 use super::widget_view::WidgetHost;
-use super::{button, muted, paint_background, stroke, Palette, Tone};
+use super::{muted, paint_background, stroke, Palette};
 use crate::holo::Face;
 use crate::holo::{a as faint, lit, mix, Light};
 use crate::simulation_lab::{self, Param, SimKind, Simulation};
@@ -249,7 +249,7 @@ pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
         let key = dock_key(&sim.id);
         if !crate::hud_dock::adopt(&key) {
             let title = format!("{} — Simulation Lab", sim.title);
-            let action = super::hud_block_window(ctx, &key, &title, [900.0, 560.0], |ui| draw_body(ui, &p, &sim, host, true));
+            let action = super::hud_block_window(ctx, &key, &title, [900.0, 560.0], |ui| draw_body(ui, &p, &sim, host));
             if action.close {
                 lab.close(&sim.id);
                 crate::hud_dock::forget(&key);
@@ -329,7 +329,7 @@ fn sim_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &
     }
     let p = Palette::new(&host.app.config().read(|c| c.interface.clone()));
     paint_background(ctx, &p);
-    let body = |ui: &mut egui::Ui| draw_body(ui, &p, &sim, host, false);
+    let body = |ui: &mut egui::Ui| draw_body(ui, &p, &sim, host);
     if class == ViewportClass::Embedded {
         egui::Window::new(&sim.title).id(egui::Id::new(("jai_sim_embedded", id))).default_size([900.0, 560.0]).show(ctx, body);
     } else {
@@ -354,13 +354,14 @@ pub(super) fn split_layout(avail: Rect) -> (Rect, Rect) {
     (controls, plot)
 }
 
-fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost, in_app: bool) {
+fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost) {
     let lab = &host.app.tools().stark.simlab;
+    // (The window's bar, or the block's frame, already wears the title and CLOSE: once is enough,
+    // Sir's screenshot of 2026-11-22 had both twice.)
     ui.horizontal_wrapped(|ui| {
-        if !in_app {
-            ui.label(RichText::new(sim.title.to_uppercase()).font(crate::holo::font(Face::Head, 16.0)).color(p.accent).extra_letter_spacing(1.5));
+        if !sim.title.eq_ignore_ascii_case(sim.kind.label()) {
+            super::chip(ui, sim.kind.label(), p.deep);
         }
-        super::chip(ui, sim.kind.label(), p.deep);
         if crate::holo_ui::key(ui, if sim.paused { "Resume" } else { "Pause" }).clicked() {
             lab.toggle_pause(&sim.id);
         }
@@ -369,10 +370,6 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
         }
         if crate::holo_ui::key(ui, "Restart").clicked() {
             lab.restart(&sim.id);
-        }
-        if !in_app && button(ui, "Close", Tone::Danger).clicked() {
-            lab.close(&sim.id);
-            ui.ctx().request_repaint_of(ViewportId::ROOT);
         }
     });
     ui.add_space(6.0);
@@ -383,6 +380,8 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
     let (controls_rect, plot_rect) = split_layout(avail);
     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(controls_rect), |ui| {
         ui.set_width(controls_rect.width());
+        // (Nothing of the column runs under the plot: it ended cut off there.)
+        ui.set_clip_rect(controls_rect.intersect(ui.clip_rect()));
         crate::holo_block::faded(ui, egui::ScrollArea::vertical().id_salt(("sim_controls", &sim.id)).max_height(controls_rect.height()), |ui| controls(ui, p, sim, host));
     });
     let deep = sim.three_d && matches!(sim.kind, SimKind::Gravity | SimKind::Ripples | SimKind::Surface);
@@ -491,7 +490,14 @@ fn controls(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost)
     ui.label(RichText::new("READOUT").font(crate::holo::font(Face::Label, 9.0)).color(p.muted).extra_letter_spacing(1.0));
     ui.add(egui::Label::new(RichText::new(sim.readout()).font(crate::holo::font(Face::Body, 12.0)).color(p.text)).wrap());
     ui.add_space(8.0);
-    muted(ui, "Drag the sliders, or tell JAI: “set the angle to 60 degrees and double the velocity”.");
+    muted(
+        ui,
+        match sim.kind {
+            SimKind::Function => "Type a curve or a point above, or tell JAI: “plot x cubed and sin(x)”.",
+            SimKind::Projectile => "Drag the sliders, or tell JAI: “set the angle to 60 degrees and double the velocity”.",
+            _ => "Drag the sliders, or tell JAI what to change.",
+        },
+    );
 }
 
 /// A plot's GeoGebra side: the input line ("g(x) = sin x", "A = (2, 3)"), what stands on the
@@ -501,11 +507,15 @@ fn plot_editor(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, lab: &simulatio
     let (mut text, mut said) = ui.data_mut(|d| d.get_temp::<(String, String)>(id)).unwrap_or_default();
     ui.add_space(6.0);
     ui.label(RichText::new("INPUT").font(crate::holo::font(Face::Label, 9.0)).color(p.muted).extra_letter_spacing(1.0));
+    // (The key first, from the right: the line takes what is left, so the row fits the column.)
     let entered = ui
         .horizontal(|ui| {
-            let line = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 44.0).hint_text("g(x) = sin x   A = (2, 3)").font(crate::holo::font(Face::Mono, 12.0)));
-            let pressed = line.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            crate::holo_ui::key(ui, "ADD").clicked() || pressed
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let added = crate::holo_ui::key(ui, "ADD").clicked();
+                let line = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut text).desired_width(ui.available_width()).hint_text("g(x) = sin x   A = (2, 3)").font(crate::holo::font(Face::Mono, 12.0)));
+                added || (line.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            })
+            .inner
         })
         .inner;
     if entered && !text.trim().is_empty() {
@@ -1722,6 +1732,34 @@ mod tests {
         // A narrow block keeps the controls to 40 %.
         let (c, p) = split_layout(Rect::from_min_size(pos2(0.0, 0.0), vec2(420.0, 300.0)));
         assert!(c.width() <= 168.0 && p.width() > 200.0);
+    }
+
+    /// Sir's screenshot of 2026-11-22: the input line's ADD key ran under the plot. The editor
+    /// keeps to its column, in a wide window and in a narrow one.
+    #[test]
+    fn the_plot_editor_keeps_to_its_column() {
+        let lab = simulation_lab::SimulationLab::default();
+        let sim = lab.launch(SimKind::Function, "a*x^2 + b*x + c", None).unwrap();
+        let p = Palette::new(&crate::interface::InterfaceSettings::default());
+        let _look = crate::holo_theme::look_for_pictures();
+        for width in [900.0, 560.0] {
+            let size = vec2(width, 560.0);
+            let (column, _) = split_layout(Rect::from_min_size(pos2(12.0, 40.0), size - vec2(24.0, 52.0)));
+            let mut stage = crate::visual_ui_verifier::Stage::new(size);
+            let frame = stage.frames(2, &mut |ctx| {
+                crate::holo::install_fonts(ctx);
+                egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(column), |ui| {
+                        ui.set_width(column.width());
+                        plot_editor(ui, &p, &sim, &lab);
+                    });
+                });
+            });
+            let add = frame.find_exact("ADD");
+            assert!(!add.is_empty() && add.iter().all(|r| r.right() <= column.right() + 1.0), "{width}: ADD at {add:?}, the column ends at {}", column.right());
+            let hint = frame.find_text("sin x");
+            assert!(hint.iter().all(|r| r.right() <= column.right() + 1.0), "{width}: the input line at {hint:?}");
+        }
     }
 
     #[test]

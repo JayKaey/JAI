@@ -687,9 +687,10 @@ pub fn show_background_window() {
     request_repaint();
 }
 
-/// "Open the protocol window": his protocols, each changed by hand.
-pub fn show_protocols() {
-    protocols_view::open();
+/// "Open the protocol window": his protocols, each changed by hand; `at`, the one to put on its
+/// form ("edit the gaming protocol").
+pub fn show_protocols(at: Option<&str>) {
+    protocols_view::open(at);
     show();
     request_repaint();
 }
@@ -1089,19 +1090,25 @@ pub(crate) fn for_test_session(builder: egui::ViewportBuilder) -> egui::Viewport
     // their `Arc`, and with a fresh one per frame each window had its icon set anew sixty
     // times a second.)
     builder.icon = shared_icon();
-    // A window Sir has had before opens where it last stood, at the size it had, unless an
-    // order of his placed it or another of his windows stands there; what the code asks of it
-    // later is done. (His choice of 2026-11-14: "Windows remember their place".)
+    // A piece of the board Sir has had before comes up where it last stood, at the size it had,
+    // unless an order of his placed it or another of his windows stands there; what the code
+    // asks of it later is done. (His choice of 2026-11-14: "Windows remember their place".)
     let by_order = PLACED_BY_ORDER.with(|p| p.replace(false));
     let code = [builder.position.map(|p| [p.x, p.y]), builder.inner_size.map(|s| [s.x, s.y])];
-    if let Some([x, y, w, h]) = builder.title.as_deref().and_then(|title| crate::own_windows::opening_place(title, code, by_order, |place| place_is_free(title, place))) {
-        let scale = points_scale();
+    let piece = builder.position.is_some();
+    let scale = points_scale();
+    if let Some([x, y, w, h]) = builder.title.as_deref().filter(|_| piece).and_then(|title| crate::own_windows::opening_place(title, code, by_order, |place| place_is_free(title, place))) {
         return builder.with_position(pos2(x as f32, y as f32) / scale).with_inner_size(vec2(w as f32, h as f32) / scale);
     }
-    // A window with no place of its own opens on the monitor Sir is using, not always on his
-    // first one, and beside the core there. (His choice of 2026-11-13: "Windows open where
-    // you work".)
-    let placed = builder.position.is_none().then(|| place_where_sir_works(&builder)).flatten();
+    // Every other window opens in the middle of the monitor Sir is using, not always on his
+    // first one, at the size he last gave it. (His choices of 2026-11-13, "Windows open where
+    // you work", and 2026-11-26, "JAI should always try to open windows in the middle of the
+    // screen".)
+    let builder = match builder.title.as_deref().filter(|_| !piece).and_then(|title| crate::own_windows::opening_place(title, code, by_order, |_| true)) {
+        Some([_, _, w, h]) => builder.with_inner_size(vec2(w as f32, h as f32) / scale),
+        None => builder,
+    };
+    let placed = (!piece).then(|| place_where_sir_works(&builder)).flatten();
     match (placed, builder.position, start_monitor_points()) {
         (Some(at), ..) => builder.with_position(at),
         // (A scripted session whose monitor is not known yet: its middle, never Sir's screen.)
@@ -1135,30 +1142,17 @@ fn faces_right(rect: Rect, core: Option<Rect>) -> bool {
     core.is_some_and(|core| rect.center().x < core.center().x)
 }
 
-/// Where a new window of `size` opens on the monitor whose work area is `work`: about the
-/// core when he stands on that monitor, beside him on his circle, the emptier side first, off
-/// the windows that stand there already (`holo_stage::slot`); else at `middle`, or where it
-/// stands on none of them when one stands there. With no free spot left, where it covers the
-/// others least (`holo_stage::least_covered`), never him.
-fn opening_spot(work: Rect, size: Vec2, core: Option<Rect>, taken: &[Rect], middle: Pos2) -> Pos2 {
-    use crate::holo_stage::{least_covered, slot, GAP};
-    let Some(core) = core.filter(|core| work.contains(core.center())) else {
-        if !taken.iter().any(|t| t.intersects(Rect::from_min_size(middle, size).shrink(1.0))) {
-            return middle;
+/// Windows placed a moment ago that have not shown themselves yet (`placed`) and would come up
+/// on `at`, the new one's place: placed again in `work`, off it and off those before them.
+/// (Those that stand there already glide aside: `own_windows::make_room`.)
+fn make_way_before_shown<'a>(work: Rect, at: Rect, placed: impl Iterator<Item = &'a mut Rect>) {
+    let mut taken = vec![at];
+    for rect in placed {
+        if rect.intersects(at.shrink(1.0)) {
+            *rect = crate::holo_stage::settle(work, *rect, &taken, crate::holo_stage::GAP, WINDOW_TITLE_ROW);
         }
-        return crate::hud_dock::find_non_overlapping_slot(work, size, taken, GAP).unwrap_or_else(|| least_covered(work, size, taken, WINDOW_TITLE_ROW, None, middle));
-    };
-    // Out on his second circle where the screen has the room: the leader that ties the window
-    // to him has a length to show there (hard against his first circle it has none).
-    let far = Rect::from_center_size(core.center(), core.size() * 1.5);
-    let with_core: Vec<Rect> = taken.iter().copied().chain([core]).collect();
-    slot(work, size, far, taken, GAP)
-        .or_else(|| slot(work, size, core, taken, GAP))
-        // No room left about him: any free spot off him and off the others.
-        .or_else(|| crate::hud_dock::find_non_overlapping_slot(work, size, &with_core, GAP))
-        // (Nothing stands there, yet it fits nowhere beside him: the middle, where the core
-        // makes room for it.)
-        .unwrap_or_else(|| if taken.is_empty() { middle } else { least_covered(work, size, taken, WINDOW_TITLE_ROW, Some(core), middle) })
+        taken.push(*rect);
+    }
 }
 
 /// A stage panel (the radar, the disk map, the Earth) whose window stands over the middle of
@@ -1199,11 +1193,11 @@ fn place_is_free(title: &str, [x, y, w, h]: [i32; 4]) -> bool {
     free
 }
 
-/// Where a window of JAI's own that has no place yet opens (points): on the monitor Sir is
-/// using, beside the core when he stands there (`opening_spot`), else in its middle, a step
-/// aside for each window of his that opened just before; beside a game, on a monitor the game
-/// is not on ("A game is left alone"). The same place for as long as the window is asked for
-/// (by its title), so a window Sir has moved is never pulled back.
+/// Where a window of JAI's own that has no place of its own opens (points): in the middle of
+/// the monitor Sir is using, and his windows that stand there make way for it ("overlap the
+/// windows" leaves them be); beside a game, on a monitor the game is not on ("A game is left
+/// alone"). The same place for as long as the window is asked for (by its title), so a window
+/// Sir has moved is never pulled back.
 fn place_where_sir_works(builder: &egui::ViewportBuilder) -> Option<Pos2> {
     let title = builder.title.clone()?;
     let mut places = lock(&PLACES);
@@ -1226,15 +1220,19 @@ fn place_where_sir_works(builder: &egui::ViewportBuilder) -> Option<Pos2> {
     let points = |r: [i32; 4]| Rect::from_min_max(pos2(r[0] as f32, r[1] as f32) / scale, pos2(r[2] as f32, r[3] as f32) / scale);
     let work = points(on.work);
     let size = builder.inner_size.unwrap_or(vec2(800.0, 600.0)).min(work.size());
-    let step = (places.len() % 6) as f32 - 1.0;
-    let middle = work.center() - size / 2.0 + vec2(34.0, 30.0) * step;
-    let middle = pos2(middle.x.clamp(work.left(), (work.right() - size.x).max(work.left())), middle.y.clamp(work.top(), (work.bottom() - size.y).max(work.top())));
-    let taken = in_the_way(&title, &places);
-    // ("Overlap the windows": always the step aside in the middle.)
-    let at = if crate::hud_dock::overlap_allowed() { middle } else { opening_spot(work, size, core_on_screen(), &taken, middle) };
-    info!("[HUD] '{title}' opens at {:.0},{:.0}, {}", at.x, at.y, if at == middle { "in the middle of the monitor in use" } else { "about the core" });
-    places.insert(title, (Rect::from_min_size(at, size), now));
-    Some(at)
+    let mut at = Rect::from_center_size(work.center(), size);
+    if crate::hud_dock::overlap_allowed() {
+        // ("Overlap the windows": a step aside in the middle for each that opened just before.)
+        at = at.translate(vec2(34.0, 30.0) * ((places.len() % 6) as f32 - 1.0));
+        at = at.translate(vec2((work.left() - at.left()).max(0.0) + (work.right() - at.right()).min(0.0), (work.top() - at.top()).max(0.0) + (work.bottom() - at.bottom()).min(0.0)));
+    } else {
+        let standing: Vec<String> = crate::own_windows::list().into_iter().map(|w| w.title).collect();
+        make_way_before_shown(work, at, places.iter_mut().filter(|(t, _)| !standing.contains(t)).map(|(_, (rect, _))| rect));
+        crate::own_windows::make_room([at.left(), at.top(), at.right(), at.bottom()].map(|v| (v * scale).round() as i32), None);
+    }
+    info!("[HUD] '{title}' opens at {:.0},{:.0}, in the middle of the monitor in use", at.min.x, at.min.y);
+    places.insert(title, (at, now));
+    Some(at.min)
 }
 
 fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(), String> {
@@ -3926,8 +3924,8 @@ struct HudApp {
     console_open: bool,
     /// The drawer's slide (it keeps sliding out after a close until it is off screen).
     console_anim: crate::hud_board::UiAnimState,
-    console_input: String,
-    console_focus: bool,
+    /// What is typed in it, shared with its own window (which draws apart from the board).
+    console: Arc<Mutex<ConsoleText>>,
     /// `[ CORE ]` / "show me your core": the 3D module sphere.
     core: crate::holo_mind::MindView,
     core_open: bool,
@@ -3968,9 +3966,6 @@ struct HudApp {
     find_open: bool,
     find_text: String,
     find_focus: bool,
-    /// The console's predictive completions for what is typed so far (asked again only when
-    /// the line changes).
-    completions: (String, Vec<String>),
     /// The header menu chosen from `[ MORE ]` in the last frame (it opens in this one).
     header_menu_next: Option<&'static str>,
     /// The board's area as the last frame laid it out (right of the widgets column when that
@@ -3987,10 +3982,6 @@ struct HudApp {
     voice_rim: f32,
     /// Music plays and the core shows it: its voice ring takes the PC's real spectrum.
     emblem_music: bool,
-    /// How tall the console's foot (the completions and the input line) was in the last frame:
-    /// the log above it takes what is left, so the input line is never pushed out of the
-    /// console when the completions appear or wrap.
-    console_foot: f32,
     /// How much of the edge strips shows (1: all of them; the calm HUD lets them step back).
     calm: f32,
     /// How far night mode has dimmed the HUD (0 day … 1 night).
@@ -4464,8 +4455,7 @@ impl HudApp {
             core_open: false,
             console_open: false,
             console_anim: Default::default(),
-            console_input: String::new(),
-            console_focus: false,
+            console: Arc::new(Mutex::new(ConsoleText { foot: 46.0, ..ConsoleText::default() })),
             frames: 0,
             fullscreen_check: now,
             fullscreen_fixes: 0,
@@ -4488,10 +4478,8 @@ impl HudApp {
             find_open: false,
             find_text: String::new(),
             find_focus: false,
-            completions: (String::new(), Vec::new()),
             header_menu_next: None,
             board_area_now: Rect::NOTHING,
-            console_foot: 46.0,
             calm: 1.0,
             night: 0.0,
             system_column_rect: None,
@@ -4630,12 +4618,12 @@ impl HudApp {
         }
         if pressed(Key::L) {
             self.console_open = !self.console_open;
-            self.console_focus = self.console_open;
+            lock(&self.console).focus = self.console_open;
         }
         // Ctrl+K: the command palette (the console's line with its completions).
         if pressed(Key::K) {
             self.console_open = true;
-            self.console_focus = true;
+            lock(&self.console).focus = true;
         }
         // Ctrl+F: search across every open block.
         if pressed(Key::F) {
@@ -5368,7 +5356,7 @@ impl HudApp {
             }
             Some("console") => {
                 self.console_open = !self.console_open;
-                self.console_focus = self.console_open;
+                lock(&self.console).focus = self.console_open;
             }
             Some("camera") => {
                 self.camera_open = !self.camera_open;
@@ -5885,48 +5873,55 @@ impl HudApp {
     fn text_console(&mut self, ctx: &egui::Context, m: &HudModel) {
         if let request @ (1 | 2) = CONSOLE_REQUEST.swap(0, Ordering::AcqRel) {
             self.console_open = request == 1;
-            self.console_focus = self.console_open;
+            lock(&self.console).focus = self.console_open;
         }
         if let Some(text) = lock(&CONSOLE_PREFILL).take() {
-            self.console_input = text;
+            lock(&self.console).input = text;
         }
         let slide = self.console_slide;
         if slide <= 0.0 {
             crate::hud_dock::forget(CONSOLE_ID);
             return;
         }
-        let speaking = m.cfg.as_ref().is_some_and(|c| c.response_mode == VoiceResponseMode::AlwaysSpeak);
         let mut act = ConsoleActions::default();
         if crate::hud_dock::all_own() {
-            // (Closed: it plays its exit, then goes.)
-            if !detached_keep(ctx, ViewportId::from_hash_of("jai_text_console"), self.console_open) {
-                return;
-            }
             self.console_at_edge = false;
-            let builder = egui::ViewportBuilder::default().with_title("Text Console — J.A.I.").with_app_id("jai").with_inner_size([CONSOLE_WIDTH, 640.0]).with_min_inner_size([320.0, 260.0]).with_decorations(false);
-            let builder = for_test_session(builder);
             // Asked for to type in (his key, a click on the corner orb): once its window is
             // up it takes the keyboard. (His windows come up without it; this one is the
             // exception, and only when Sir himself called it. Never in a scripted session.)
-            if self.console_focus {
+            let console = ViewportId::from_hash_of(format!("jai_block_{CONSOLE_ID}"));
+            let mut text = lock(&self.console);
+            if text.focus {
                 self.console_wants_keys = !crate::platform::in_test_session();
             }
-            let console = ViewportId::from_hash_of("jai_text_console");
             if self.console_wants_keys && lock(&DETACHED_MOTIONS).revealed.contains(&console) {
                 self.console_wants_keys = false;
-                self.console_focus = true;
+                text.focus = true;
                 ctx.send_viewport_cmd_to(console, ViewportCommand::Focus);
             }
-            ctx.show_viewport_immediate(ViewportId::from_hash_of("jai_text_console"), builder, |ctx, _| {
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    act.close = true;
+            // It draws apart from the board (`own_block`): what it shows is drawn again when
+            // this changes, or when it is typed in.
+            use std::hash::{Hash, Hasher};
+            let mut seen = std::collections::hash_map::DefaultHasher::new();
+            for line in &m.messages {
+                (line.text.len(), line.streaming, line.faded).hash(&mut seen);
+            }
+            (m.cfg.as_ref().map(|c| c.response_mode == VoiceResponseMode::AlwaysSpeak), self.app.tools().focus.last_file(), text.input.len(), text.focus).hash(&mut seen);
+            drop(text);
+            let (app, rt, model, text) = (self.app.clone(), self.rt.clone(), Arc::clone(&self.model), Arc::clone(&self.console));
+            let body = move |ui: &mut Ui| {
+                let mut act = ConsoleActions::default();
+                ui.set_min_size(ui.available_size());
+                HudApp::console_body(ui, &app, &lock(&model), &mut lock(&text), false, true, &mut act);
+                if let Some(mode) = act.mode {
+                    send(&app, &rt, &model, HudCommand::SetResponseMode { mode });
                 }
-                egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(12.0))).show(ctx, |ui| {
-                    ui.set_min_size(ui.available_size());
-                    self.console_body(ui, ctx, m, speaking, true, &mut act);
-                });
-                paint_window_border(ctx);
-            });
+                if let Some(line) = act.send {
+                    lock(&text).input.clear();
+                    send(&app, &rt, &model, HudCommand::Chat { text: line });
+                }
+            };
+            act.close = own_block(ctx, CONSOLE_ID, "Text console // log", [CONSOLE_WIDTH, 640.0], seen.finish(), self.console_open, body);
         } else {
             let screen = home_screen(ctx);
             let top = screen.top() + 12.0 + HEADER_H + 10.0;
@@ -5960,7 +5955,7 @@ impl HudApp {
                 .show(ctx, |ui| {
                     ui.set_opacity(slide);
                     ui.set_min_size(ui.available_size());
-                    self.console_body(ui, ctx, m, speaking, false, &mut act);
+                    Self::console_body(ui, &self.app, m, &mut lock(&self.console), self.console_pinned, false, &mut act);
                 });
             if let Some(inner) = shown {
                 let rect = inner.response.rect;
@@ -5982,22 +5977,20 @@ impl HudApp {
             self.command(HudCommand::SetResponseMode { mode });
         }
         if let Some(text) = act.send {
-            self.console_input.clear();
+            lock(&self.console).input.clear();
             self.command(HudCommand::Chat { text });
         }
     }
 
-    /// The console's content, in the HUD or in its own window (`detached`: the title row moves
-    /// the window).
-    fn console_body(&mut self, ui: &mut Ui, ctx: &egui::Context, m: &HudModel, speaking: bool, detached: bool, act: &mut ConsoleActions) {
-        // In its window it wears the bar every window of his wears; on the board a row of its own.
-        if detached {
-            act.close |= detached_bar(ui, ctx, CONSOLE_ID, "Text // console");
-        } else {
+    /// The console's content, on the board or in its own window (`detached`: its window wears
+    /// the bar every window of his wears, drawn by `own_block`).
+    fn console_body(ui: &mut Ui, app: &Jai, m: &HudModel, text: &mut ConsoleText, pinned: bool, detached: bool, act: &mut ConsoleActions) {
+        let speaking = m.cfg.as_ref().is_some_and(|c| c.response_mode == VoiceResponseMode::AlwaysSpeak);
+        // On the board a row of its own.
+        if !detached {
             ui.horizontal(|ui| {
                 ui.add(egui::Label::new(RichText::new("TEXT // CONSOLE").font(strip_font()).color(crate::hud_board::active_colour())).sense(Sense::drag()));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let pinned = self.console_pinned;
                     act.close |= holo_ui::key_on(ui, "CLOSE", false).on_hover_text("Close (Esc)").clicked();
                     act.pin |= holo_ui::key_on(ui, "PIN", pinned).on_hover_text("Keep it in front (Esc leaves it open)").clicked();
                 });
@@ -6018,7 +6011,7 @@ impl HudApp {
         // The reference's file box: the file "this file" means right now (one dropped anywhere
         // on the HUD, or the last one he found or edited; none once the conversation has let
         // it go).
-        match self.app.tools().focus.last_file() {
+        match app.tools().focus.last_file() {
             Some(path) => {
                 let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
                 ui.label(RichText::new(format!("FILE // {}", crate::crash_guard::clip(&name, 48))).font(strip_font()).color(crate::hud_board::active_colour())).on_hover_text(path.display().to_string());
@@ -6028,7 +6021,7 @@ impl HudApp {
             }
         }
         ui.add_space(8.0);
-        let log_height = (ui.available_height() - self.console_foot).max(60.0);
+        let log_height = (ui.available_height() - text.foot).max(60.0);
         crate::holo_block::faded(ui, egui::ScrollArea::vertical().max_height(log_height).auto_shrink([false, false]).stick_to_bottom(true), |ui| {
             for line in m.messages.iter().filter(|l| !l.text.trim().is_empty()) {
                 let (who, colour) = match line.who {
@@ -6047,24 +6040,24 @@ impl HudApp {
         ui.add_space(6.0);
         // Predictive completion: what Sir most likely means by what he has typed so far (his
         // own recent requests first, then JAI's command vocabulary). Tab takes the first.
-        if self.completions.0 != self.console_input {
+        if text.completions.0 != text.input {
             let recent: Vec<String> = m.messages.iter().rev().filter(|l| l.who == Speaker::Sir).take(40).map(|l| l.text.clone()).collect();
-            self.completions = (self.console_input.clone(), crate::command_palette::complete(&self.console_input, &recent, 4));
+            text.completions = (text.input.clone(), crate::command_palette::complete(&text.input, &recent, 4));
         }
-        if let Some(text) = console_foot(ui, &mut self.console_input, &self.completions.1, &mut self.console_focus) {
-            act.send = Some(text);
+        if let Some(line) = console_foot(ui, &mut text.input, &text.completions.1, &mut text.focus) {
+            act.send = Some(line);
         }
         // What the foot took this frame is what the log leaves it in the next one. A foot that
         // grew (the completions appeared) overflowed the console in this pass: it is laid out
         // again at once. One that shrank only left a gap for a frame.
         let foot = ui.cursor().top() - foot_top;
-        if (foot - self.console_foot).abs() > 0.5 {
-            if foot > self.console_foot {
-                ctx.request_discard("the console's foot grew");
+        if (foot - text.foot).abs() > 0.5 {
+            if foot > text.foot {
+                ui.ctx().request_discard("the console's foot grew");
             } else {
-                ctx.request_repaint();
+                ui.ctx().request_repaint();
             }
-            self.console_foot = foot;
+            text.foot = foot;
         }
     }
 
@@ -6381,7 +6374,7 @@ impl HudApp {
             }
             V::TextConsole => {
                 self.console_open = if toggle { !self.console_open } else { true };
-                self.console_focus = self.console_open;
+                lock(&self.console).focus = self.console_open;
             }
         }
     }
@@ -6540,7 +6533,7 @@ impl HudApp {
                     Tool::FeatureLab => show_features(true),
                     Tool::Mixer => show_mixer(true),
                     Tool::Hotkeys => show_hotkeys(),
-                    Tool::Protocols => show_protocols(),
+                    Tool::Protocols => show_protocols(None),
                     Tool::Background => show_background_window(),
                     Tool::VoiceSetup => crate::hud_feel::apply(&serde_json::json!({"voice_setup": true})),
                     Tool::Missed => crate::hud_feel::apply(&serde_json::json!({"missed": true})),
@@ -7551,6 +7544,17 @@ struct ConsoleActions {
     pin: bool,
 }
 
+/// The text console's line: what is typed, its predictive completions (asked again only when
+/// the line changes), whether it should take the keyboard, and how tall its foot (completions
+/// and input line) was in the last frame, so the log above leaves the input line in view.
+#[derive(Default)]
+struct ConsoleText {
+    input: String,
+    completions: (String, Vec<String>),
+    focus: bool,
+    foot: f32,
+}
+
 /// The text console's id among the HUD's windows.
 const CONSOLE_ID: &str = "console";
 
@@ -7914,11 +7918,25 @@ fn reveal_when_drawn(ctx: &egui::Context) {
     if viewport == ViewportId::ROOT || ctx.cumulative_pass_nr() < 1 {
         return;
     }
-    let stands = ctx.input(|i| i.viewport().inner_rect);
+    let (stands, title) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().title.clone()));
     let mut motions = lock(&DETACHED_MOTIONS);
     if motions.revealed.insert(viewport) {
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         info!("[HUD] A window of its own shows itself, its first frame drawn ({viewport:?})");
+        // In front of every other program's window as it shows, without the keyboard. (Sir,
+        // 2026-11-26: "when JAI opens a window that window should be in front of all other
+        // windows so that i can see it".)
+        if let Some(title) = title {
+            std::thread::spawn(move || {
+                // (Once Windows shows it: its first frame is on the way.)
+                std::thread::sleep(Duration::from_millis(150));
+                wm::run_detached(move || {
+                    if let Some(hwnd) = wm::own_window(&title) {
+                        desk::raise(hwnd);
+                    }
+                });
+            });
+        }
     }
     // Where it stands now: the board ties it to the core with a leader, and draws that anew
     // when the window has moved.
@@ -9058,12 +9076,93 @@ pub(crate) fn board_area(screen: Rect, left_reserve: f32, right_reserve: f32) ->
 /// (the visual verifier fills the board with these). Its text scrolls when it is longer than
 /// the block; `content` is what `Copy Content` and the search read. True when it was closed.
 pub(crate) fn text_block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], content: &str) -> bool {
+    use std::hash::{Hash, Hasher};
     crate::hud_dock::describe_block(id, content);
-    block(ctx, id, title, size, |ui| {
+    let mut version = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut version);
+    let content = content.to_string();
+    own_block(ctx, id, title, size, version.finish(), true, move |ui| {
         crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
-            ui.add(egui::Label::new(RichText::new(content).size(13.5).color(strip_ink())).wrap());
+            ui.add(egui::Label::new(RichText::new(&content).size(13.5).color(strip_ink())).wrap());
         });
     })
+}
+
+/// A block's window as it opens: its title in the taskbar, its size, no frame of Windows'.
+fn block_builder(title: &str, size: [f32; 2]) -> egui::ViewportBuilder {
+    let name = title.split("//").next().unwrap_or(title).trim();
+    let mut builder = egui::ViewportBuilder::default().with_title(format!("{name} \u{2014} J.A.I.")).with_app_id("jai").with_inner_size(size).with_min_inner_size([320.0, 180.0]).with_decorations(false);
+    if let Some(icon) = window_icon() {
+        builder = builder.with_icon(Arc::new(icon));
+    }
+    for_test_session(builder)
+}
+
+/// Views of `own_block` closed by their own key or Windows' close, in their own frames: the
+/// board's next frame tells their module.
+static CLOSED_BY_KEY: Mutex<Vec<ViewportId>> = Mutex::new(Vec::new());
+/// What each `own_block` window last drew from (its module's version and the theme).
+static OWN_DRAWN: std::sync::LazyLock<Mutex<std::collections::HashMap<ViewportId, u64>>> = std::sync::LazyLock::new(Default::default);
+
+/// `block` for a view whose body owns what it draws: its window draws apart from the board, so
+/// scrolling or hovering it repaints it alone, and while nothing in it changes it costs no frame
+/// at all. Inside the board's frame (`block`) a view is laid out again with every frame of the
+/// board, at up to the display's rate: measured 2026-11-26, the board alone took 2 ms a frame,
+/// with the settings, the console and the changes list open 17 ms (Sir: "scrolling in the
+/// settings and in the text console feels laggy", "my PC really struggles when JAI has multiple
+/// windows open"). `version` is what its content is drawn from: a new one (or a new theme) asks
+/// for its frame. True when it was closed.
+pub(crate) fn own_block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], version: u64, open: bool, body: impl Fn(&mut Ui) + Send + Sync + 'static) -> bool {
+    use std::hash::{Hash, Hasher};
+    let viewport = ViewportId::from_hash_of(format!("jai_block_{id}"));
+    if !crate::hud_dock::adopt(id) || ctx.embed_viewports() {
+        crate::hud_dock::window_gone(id);
+        detached_keep(ctx, viewport, true);
+        return open && hud_block_window(ctx, id, title, size, |ui| body(ui)).close;
+    }
+    // (Closed by its view (`open` false): it plays its exit, then goes.)
+    if !detached_keep(ctx, viewport, open) {
+        return false;
+    }
+    if open {
+        crate::hud_dock::publish_window(id, title);
+    }
+    let t = crate::holo::theme();
+    let mut drawn = std::collections::hash_map::DefaultHasher::new();
+    (version, [t.accent(), t.deep(), t.ink(), t.void(), t.alert()]).hash(&mut drawn);
+    let drawn = drawn.finish();
+    if lock(&OWN_DRAWN).insert(viewport, drawn) != Some(drawn) {
+        ctx.request_repaint_of(viewport);
+    }
+    let closed = crate::hud_dock::closing_progress(id).is_some() || {
+        let mut by_key = lock(&CLOSED_BY_KEY);
+        let was = by_key.contains(&viewport);
+        by_key.retain(|v| *v != viewport);
+        was
+    };
+    let (known_as, name) = (id.to_string(), title.to_string());
+    ctx.show_viewport_deferred(viewport, block_builder(title, size), move |ctx, class| {
+        let mut closed = ctx.input(|i| i.viewport().close_requested());
+        if class == egui::ViewportClass::Embedded {
+            egui::Window::new(&name).id(egui::Id::new(("jai_embedded_block", &known_as))).show(ctx, |ui| body(ui));
+        } else if !closed {
+            egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                closed = detached_bar(ui, ctx, &known_as, &name);
+                crate::crash_guard::guard(&known_as, || body(ui));
+            });
+            paint_window_border(ctx);
+        }
+        if closed {
+            lock(&CLOSED_BY_KEY).push(ctx.viewport_id());
+            ctx.request_repaint_of(ViewportId::ROOT);
+        }
+    });
+    if closed {
+        crate::hud_dock::window_gone(id);
+        lock(&DETACHED_MOTIONS).forget(viewport);
+        lock(&OWN_DRAWN).remove(&viewport);
+    }
+    closed
 }
 
 /// A view of a module outside the GUI (`body` draws its content) in a window of its own,
@@ -9079,12 +9178,7 @@ pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], 
         return hud_block_window(ctx, id, title, size, body).close;
     }
     detached_keep(ctx, viewport, true);
-    let name = title.split("//").next().unwrap_or(title).trim();
-    let mut builder = egui::ViewportBuilder::default().with_title(format!("{name} \u{2014} J.A.I.")).with_app_id("jai").with_inner_size(size).with_min_inner_size([320.0, 180.0]).with_decorations(false);
-    if let Some(icon) = window_icon() {
-        builder = builder.with_icon(Arc::new(icon));
-    }
-    let builder = for_test_session(builder);
+    let builder = block_builder(title, size);
     // In a window of its own it is still one of his blocks: "close the windows", "close it" and
     // its name mean it too (`hud_dock::close_named`, `close_all_blocks`).
     crate::hud_dock::publish_window(id, title);
@@ -9713,6 +9807,7 @@ impl HudApp {
         crate::bg_media::curtain(ctx, &media_rects(ctx));
         // Night mode: the HUD dims (by the clock or because Sir said so).
         crate::hud_feel::set_night_by_clock(iface.night_mode);
+        crate::hud_feel::keep_saved(&iface);
         // (A scripted session shows the dimming from its 34th to its 46th second on request.)
         let night = (crate::hud_feel::night_active() || (demo("night") && (34.0..46.0).contains(&hud_age()))) && !windows_still(ctx);
         self.night = crate::holo_motion::approach(self.night, if night { 1.0 } else { 0.0 }, dt, 0.9);
@@ -10015,11 +10110,12 @@ impl HudApp {
     fn corner_orb_frame(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings) {
         use crate::wallpaper::{OrbPhase, Standing};
         let (centre, radius, rest) = self.emblem_spot;
-        // (In orb mode the floating orb stands out in front already: this one stays home.)
-        if iface.orb_mode {
+        // (In orb mode the floating orb stands out in front already: this one stays home. Nor
+        // does it come out when Sir switched it off.)
+        if iface.orb_mode || !iface.corner_orb {
             (self.corner_orb, self.orb_out_on, self.orb_landed) = (Default::default(), None, 0);
         }
-        if self.backdrop != Standing::On || self.boot.is_some() || radius <= 0.0 || iface.orb_mode {
+        if self.backdrop != Standing::On || self.boot.is_some() || radius <= 0.0 || iface.orb_mode || !iface.corner_orb {
             crate::wallpaper::set_orb_out(false);
             return;
         }
@@ -10032,7 +10128,9 @@ impl HudApp {
         let now = Instant::now();
         // Spoken to (his name was heard, he thinks or speaks, or the conversation is open), or
         // at work on something that shows (a badge, an offer waiting for an answer).
-        let talking = matches!(m.state.as_str(), "thinking" | "speaking") || (m.state == "listening" && m.window_until.is_some_and(|t| t > now)) || crate::hud_lines::woke_age().is_some_and(|age| age < 2.5);
+        // ("Only while he speaks": not for his name heard, a short order's badge or a timer.)
+        let only_speaking = iface.corner_orb_speaking_only;
+        let talking = if only_speaking { m.state == "speaking" } else { matches!(m.state.as_str(), "thinking" | "speaking") || (m.state == "listening" && m.window_until.is_some_and(|t| t > now)) || crate::hud_lines::woke_age().is_some_and(|age| age < 2.5) };
         // What he is at for longer shows as a ring round the orb: it fills as a timer runs out,
         // and turns while a search runs on (which has no end to count to). ("Progress on the
         // orb", his choice of 2026-11-13: for that long the orb stays out.)
@@ -10041,9 +10139,7 @@ impl HudApp {
         let timer_label = (!timers.is_empty()).then(|| timers.iter().take(3).map(|(line, _)| line.as_str()).collect::<Vec<_>>().join("\n"));
         let more_rings: Vec<f32> = timers.iter().skip(1).take(2).filter_map(|(_, share)| *share).collect();
         let progress: Option<Option<f32>> = timers.first().map(|(_, share)| *share).or_else(|| crate::hud_board::researching().then_some(None));
-        let working = m.quick.as_ref().is_some_and(|(_, _, until)| *until > now)
-            || crate::hud_lines::offered().is_some()
-            || progress.is_some()
+        let working = (!only_speaking && (m.quick.as_ref().is_some_and(|(_, _, until)| *until > now) || crate::hud_lines::offered().is_some() || progress.is_some()))
             // (A question of his, or orders he offers, wait for Sir's word.)
             || crate::ask_first::pending().is_some()
             || crate::did_you_mean::current().is_some();
@@ -10210,7 +10306,7 @@ impl HudApp {
             OrbClick::Board => show_the_board(&self.rt),
             OrbClick::Console => {
                 self.console_open = true;
-                self.console_focus = true;
+                lock(&self.console).focus = true;
             }
             OrbClick::Drag if self.corner_orb.grabbed() => ctx.send_viewport_cmd_to(viewport, ViewportCommand::StartDrag),
             OrbClick::Drag => {}
@@ -11453,54 +11549,31 @@ mod tests {
         assert_eq!(frame(), Duration::ZERO, "the HUD drew, yet the window waited");
     }
 
-    /// Sir, 2026-11-19: "All windows should be real windows", and of the blocks on the board:
-    /// "I really like how the windows have all a connection to the orb. I want this also to
-    /// happen with the windows you are making now." A new window takes its place about the
-    /// core as a block did: beside him on his circle, the next on the other side, none on him
-    /// or on another. Only where he is not on the monitor in use does it open in its middle.
+    /// Sir, 2026-11-26: "JAI should always try to open windows in the middle of the screen",
+    /// and where windows stand there "he should move those windows away". Windows opened
+    /// together ("open 3 random windows") each take the middle in turn: those placed a moment
+    /// before that have not shown themselves yet come up aside, off it and off one another.
     #[test]
-    fn a_new_window_opens_beside_the_core_and_never_on_it() {
+    fn a_new_window_takes_the_middle_and_those_before_it_make_way() {
         let work = Rect::from_min_size(pos2(2560.0, 0.0), vec2(2560.0, 1392.0));
-        let core = Rect::from_center_size(work.center(), Vec2::splat(420.0));
-        let size = vec2(560.0, 400.0);
-        let middle = work.center() - size / 2.0;
-        let mut taken: Vec<Rect> = Vec::new();
-        for k in 0..6 {
-            let window = Rect::from_min_size(opening_spot(work, size, Some(core), &taken, middle), size);
-            assert!(work.expand(0.5).contains_rect(window), "window {k} hangs off the screen: {window:?}");
-            assert!(!window.intersects(core.shrink(40.0)), "window {k} stands on the core: {window:?}");
-            assert!(taken.iter().all(|t| !t.intersects(window)), "window {k} stands on another: {window:?}");
-            taken.push(window);
+        let mut placed: Vec<Rect> = Vec::new();
+        // (Three that fit beside each other: with no room left they cover it as little as they can.)
+        for (k, size) in [vec2(560.0, 400.0), vec2(900.0, 600.0), vec2(620.0, 700.0)].into_iter().enumerate() {
+            let at = Rect::from_center_size(work.center(), size);
+            make_way_before_shown(work, at, placed.iter_mut());
+            for (j, rect) in placed.iter().enumerate() {
+                assert!(!rect.intersects(at.shrink(1.0)), "window {j} still on window {k}: {rect:?} {at:?}");
+                assert!(work.expand(0.5).contains_rect(*rect), "window {j} pushed off the screen: {rect:?}");
+            }
+            placed.push(at);
         }
-        assert!(taken[0].center().x > core.center().x && taken[1].center().x < core.center().x, "the first two flank him: {taken:?}");
-        // Out on his second circle, so the leader that ties each to him has a length to show.
-        let ring = core.width() * 0.5 * 1.55 / 1.15;
-        for window in &taken[..2] {
-            let (from, to) = crate::holo_stage::leader(core.center(), ring, *window).expect("a leader to a window beside him");
-            assert!((to - from).length() > 120.0, "a leader too short to see: {:.0} to {window:?}", (to - from).length());
-        }
-        // Large windows, as his are (the settings, the Feature Lab, the telemetry, the console,
-        // the mixer on one 1440p screen): none on him, even when no free place is left.
-        let mut large: Vec<Rect> = Vec::new();
-        for (k, size) in [vec2(620.0, 680.0), vec2(580.0, 340.0), vec2(820.0, 720.0), vec2(620.0, 760.0), vec2(440.0, 640.0)].into_iter().enumerate() {
-            let window = Rect::from_min_size(opening_spot(work, size, Some(core), &large, work.center() - size / 2.0), size);
-            assert!(work.expand(0.5).contains_rect(window) && !window.intersects(core.shrink(40.0)), "large window {k} hangs off the screen or stands on the core: {window:?}");
-            // (Stacked over others where no free place is left: their headers stay in view.)
-            assert!(large.iter().all(|under| !window.intersects(Rect::from_min_size(under.min, vec2(under.width(), WINDOW_TITLE_ROW)))), "large window {k} covers a header: {window:?} over {large:?}");
-            large.push(window);
-        }
-        // A panel wider than his flank (the disk map) and a screen with no room at all: the
-        // middle, as before (there the core makes room, `stage_window_covers_centre`).
-        let wide = vec2(1120.0, 700.0);
-        assert_eq!(opening_spot(work, wide, Some(core), &[], work.center() - wide / 2.0), work.center() - wide / 2.0);
-        assert_eq!(opening_spot(work, work.size(), Some(core), &[], Pos2::ZERO), Pos2::ZERO);
-        // He stands on another monitor, or is not up: the middle of the one in use.
-        assert_eq!(opening_spot(work, size, Some(core.translate(vec2(-2560.0, 0.0))), &[], middle), middle);
-        assert_eq!(opening_spot(work, size, None, &[], middle), middle);
-        // (A window stands there: off it, not a step beside it on it.)
-        let standing = Rect::from_min_size(middle + vec2(-34.0, -30.0), size);
-        let off = Rect::from_min_size(opening_spot(work, size, None, &[standing], middle), size);
-        assert!(!off.intersects(standing) && work.contains_rect(off), "{off:?}");
+        let last = placed.len() - 1;
+        assert_eq!(placed[last].center(), work.center(), "the newest stands in the middle");
+        // One that stands elsewhere stays where it is.
+        let mut away = [Rect::from_min_size(work.min + vec2(40.0, 40.0), vec2(300.0, 200.0))];
+        let before = away[0];
+        make_way_before_shown(work, Rect::from_center_size(work.center(), vec2(560.0, 400.0)), away.iter_mut());
+        assert_eq!(away[0], before);
     }
 
     /// The board ties each of his windows to the core as it tied its blocks: where they stand

@@ -815,7 +815,7 @@ impl Brain {
              - Never do arithmetic or unit conversions in your head: call calculate. Reminders and timers: reminders / a CountdownOrStopwatch widget. 'Good morning', 'brief me', 'update me on my day': run_executive_briefing. Routines and workspaces: manage_stark_protocol (\"engage house party protocol\"); concentration: focus_mode.\n\
              - SCREEN vs CALENDAR: \"what's on my screen\", \"what do you see\", \"what am I looking at\" are about his monitor: inspect_screen_or_selection, never the calendar. The calendar is read only when he says calendar, schedule, events, appointments or Termine.\n\
              - SIMULATIONS: \"show me / simulate / plot / visualise it\", or a physics problem, function or algorithm Sir could watch → launch_interactive_simulation with concrete parameters from the conversation (a ball thrown 5 m up: projectile, angle 90, height 5, gravity 9.81); adjust_simulation moves its sliders. Never draw diagrams, ASCII art or fake visuals in the chat.\n\
-             - YOUR LOOK is light on black glass: the canvas is always black, and colour lives in the theme (configure_interface hud_palette, or accent_color for a colour of his own). Pure orb mode: control_orb_mode. How you listen: set_listening_mode (hands_free / wake_word). App volumes: control_audio_mixer (\"Sonora to 30 %, Discord to 100 %\", \"mute Chrome\").\n\
+             - YOUR LOOK is light on black glass: the canvas is always black, and colour lives in the theme (configure_interface hud_palette, or accent_color for a colour of his own). Pure orb mode: control_orb_mode. How you listen: set_listening_mode (wake_word / when_spoken_to / hands_free). App volumes: control_audio_mixer (\"Sonora to 30 %, Discord to 100 %\", \"mute Chrome\").\n\
              - You can see and use Sir's desktop: inspect_screen_or_selection (his selection, the active window or any monitor), clipboard (read or copy), top_processes (what slows the PC), network_status, search_conversation (what you discussed before). The live context lists his monitors.\n\
              - FOLLOW-UPS: \"full screen\", \"maximize it\", \"close it\", \"move it to the left\" without a name mean the app or website in the Conversation focus line of the live context: call window_management WITHOUT target_window (fullscreen, maximize, snap_left …) or close_application with app_name \"it\". Never full-screen, minimise or close yourself unless Sir says \"yourself\" or \"JAI\". Your own views (Earth, radar, a simulation …): arrange_jai_window.\n\
              - Websites: open_website — direct_url (\"open YouTube\"), channel_or_profile (\"open BastiGHG on YouTube\", a Twitch streamer, a GitHub user, a subreddit), site_search (\"open YouTube and search for Minecraft\", \"RTX 3060 Ti on Kleinanzeigen\").\n\
@@ -2647,8 +2647,10 @@ impl Brain {
                     Some(format!("Your protocols are {}, Sir.", join_and(&names)))
                 }
                 "delete" | "remove" => Some("Done, Sir. That protocol is gone.".into()),
+                // (Their results are said as they are: what changed, or what it does.)
+                "add_step" | "add_steps" | "remove_step" | "rename" | "update" | "change" | "describe" | "explain" | "steps" | "edit" | "open" | "open_editor" => Some(out.to_string()),
                 // (Reached by Sir's yes to "Did you mean: create a protocol called …?".)
-                "create" | "save" | "add" | "update" => Some(format!("Done, Sir. The {} is saved.", crate::protocols::display_name(args["protocol_name"].as_str().or(args["name"].as_str()).unwrap_or("new")))),
+                "create" | "save" | "add" => Some(format!("Done, Sir. The {} is saved.", crate::protocols::display_name(args["protocol_name"].as_str().or(args["name"].as_str()).unwrap_or("new")))),
                 // Its line was said as it started (`activating`); afterwards only what failed.
                 _ => out.lines().any(|l| l.trim_start().starts_with("FAIL ")).then(|| "One or two of its steps failed, Sir; the details are in the log.".to_string()),
             },
@@ -2658,6 +2660,8 @@ impl Brain {
                 _ => "Right away, Sir. Opening it.".into(),
             }),
             "open_application" if args["app_name"] == crate::apps::PRIVATE_WINDOW => Some(format!("{}, Sir.", out.trim_end_matches('.'))),
+            // ("My mail": the app of that kind he found, by its own name.)
+            "open_application" if out.contains(" installed here.") => Some(format!("Right away, Sir. Opening {}.", out.trim_start_matches("Opened ").split(": the ").next().unwrap_or("it"))),
             "open_application" => Some(
                 self.next_ack(&[
                     "Right away, Sir. Opening {app} now.",
@@ -2750,10 +2754,14 @@ impl Brain {
                 let line = crate::audio_mixer::ack(args, out);
                 (!line.is_empty()).then_some(line)
             }
-            "set_listening_mode" => Some(if out.contains("HANDS-FREE") {
+            "set_listening_mode" => Some(if out.starts_with("Listening mode: HANDS-FREE") {
                 "Hands-free mode, Sir. I'm listening; background chatter stays background.".into()
+            } else if out.starts_with("Listening mode: WHEN SPOKEN TO") {
+                "Understood, Sir. I'll answer whenever I'm spoken to, name or no name.".into()
+            } else if out.starts_with("Listening mode: WAKE-WORD") {
+                "Understood, Sir. I'll only respond when my name is in the sentence.".into()
             } else {
-                "Understood, Sir. I'll only respond when you say my name.".into()
+                out.to_string()
             }),
             "shutdown_jai" => Some(sign_off()),
             "control_jai_lifecycle" => Some(
@@ -4353,6 +4361,14 @@ fn static_route_tool(name: &str) -> Option<&'static str> {
 fn precision_music_intent(text: &str) -> Option<Intent> {
     if !integration_router::has_music_language(text) { return None; }
     let normalized = intents::normalize_phrase(text);
+    // "Play a random song from my Focus playlist", "spiel ein zufälliges Lied aus meiner Focus
+    // Playlist": one of its songs, chosen at random (`song_name` "random"), not its first.
+    static ANY_FROM: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(
+        r"^(?:play|spiel|spiele|put on)\s+(?:me\s+|mir\s+)?(?:a|one|any|some|ein|einen|irgendein|irgendeinen)\s+(?:random\s+|zufälliges\s+|zufälligen\s+|beliebiges\s+)?(?:song|track|lied|titel)\s+(?:from|in|out of|off|aus|von)\s+(?:my\s+|meiner\s+|meine\s+|meinem\s+|der\s+|the\s+|mein\s+)?(?:playlist\s+)?(.+?)(?:\s+playlist)?$"
+    ).expect("random entry expression"));
+    if let Some(c) = ANY_FROM.captures(&normalized) {
+        return Some(Intent::Tool { name: "control_music", args: json!({"action": "play_from_playlist", "song_name": "random", "playlist_name": c[1].trim()}) });
+    }
     // "Play Back in Black from my playlist JaysRock in Sonora (without using search)",
     // "spiel Thunderstruck aus meiner Playlist Jays Rock": that playlist's own entry.
     static FROM_PLAYLIST: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(
@@ -4977,6 +4993,14 @@ mod tests {
         let de = args("Spiel Thunderstruck aus meiner Playlist Jays Rock");
         assert_eq!((de["action"].as_str(), de["song_name"].as_str()), (Some("play_from_playlist"), Some("thunderstruck")));
         assert_eq!(args("play Highway to Hell in my playlist JaysRock")["action"], "play_from_playlist");
+        // (Sir, 2026-11-26: "play a random song from my Focus playlist" started the playlist.)
+        for (said, list) in [("Play a random song from my Focus playlist", "focus"), ("play me any song from my playlist Focus", "focus"), ("Spiel ein zufälliges Lied aus meiner Focus Playlist", "focus"), ("play a random track from Jays Rock", "jays rock")] {
+            let a = args(said);
+            assert_eq!((a["action"].as_str(), a["song_name"].as_str(), a["playlist_name"].as_str()), (Some("play_from_playlist"), Some("random"), Some(list)), "{said}");
+        }
+        // (And nothing before it in a turn takes it for the playlist itself.)
+        let (tool, a) = crate::phrasings::route("Jay, play a random song from my Focus playlist.").expect("routed");
+        assert_eq!((tool.as_str(), a["song_name"].as_str()), ("control_music", Some("random")));
     }
 
     #[test]

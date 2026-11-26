@@ -46,6 +46,18 @@ const TALL_M: f32 = 35.0;
 /// Houses in view up to which the walls get their storey lines, and labels drawn at most.
 const STOREYS_UP_TO: usize = 600;
 const MAX_LABELS: usize = 140;
+/// Leaned back, the houses behind the middle of the view fall back into the deep, to a ghost at
+/// `HOUSES_FADE` along the view (in camera distances: 1 in the middle) and gone at `HOUSES_TO`:
+/// seen low over a town, its far half was a tangle of outlines as bright as the near one
+/// (2026-11-26). Roofs are labelled up to `LABELS_TO`.
+const HOUSES_FADE: f64 = 1.5;
+const HOUSES_TO: f64 = 2.4;
+const LABELS_TO: f64 = 1.25;
+
+/// How much of a house's light is left `depth` along the view (see `HOUSES_FADE`).
+fn behind(depth: f64) -> f32 {
+    (1.0 - 0.8 * model::smoothstep(1.0, HOUSES_FADE, depth) - 0.2 * model::smoothstep(HOUSES_FADE, HOUSES_TO, depth)) as f32
+}
 /// Window panes drawn at most in a frame (a wall's rooms, up close).
 const PANES_UP_TO: usize = 30_000;
 /// A tower's height scale on its front corner: a tick every so many metres, a long one every fifth.
@@ -771,10 +783,10 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
     let now = Instant::now();
     let tiles = towns(flat, map.expand(120.0), Z);
     let screen = to_screen(flat);
-    let middle = map.center();
-    // Each house where its middle stands, how far along the view and how far it has risen: one
-    // under or behind the camera is not seen.
-    let mut seen: Vec<(Pos2, f64, &Building, f32)> = tiles
+    let (metre, eye, on_ground) = (flat.px_per_km() / 1000.0, flat.eye(), flat.grounder());
+    // Each house: how far from the camera on the ground, how far along the view and how far it
+    // has risen. One under or behind the camera, or beyond the houses' reach, is not seen.
+    let mut seen: Vec<(f64, f64, &Building, f32)> = tiles
         .iter()
         .flat_map(|t| {
             let secs = now.saturating_duration_since(t.came.map_or(rise.at, |came| came.max(rise.at))).as_secs_f32();
@@ -782,17 +794,20 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
         })
         .filter_map(|(b, secs)| {
             let (at, depth) = screen(b.mid, 0.0);
-            (depth >= model::NEAR && map.expand((b.reach * flat.world / depth) as f32 + 60.0).contains(at)).then(|| {
+            let reached = depth < HOUSES_TO || chosen.is_some_and(|c| b.holds(c));
+            (depth >= model::NEAR && reached && map.expand((b.reach * flat.world / depth) as f32 + 60.0).contains(at)).then(|| {
                 let far = (b.mid[0] - rise.from[0]).hypot(b.mid[1] - rise.from[1]) / rise.reach.max(1e-12);
-                (at, depth, b, grown(secs, far as f32, jitter(b.mid)))
+                let g = on_ground(b.mid[0], b.mid[1]);
+                ((g[0] - eye[0]).hypot(g[1] - eye[1]), depth, b, grown(secs, far as f32, jitter(b.mid)))
             })
         })
         .collect();
     let (stood, rising) = (!seen.is_empty(), seen.iter().any(|s| s.3 < 1.0));
     seen.retain(|s| s.3 > 0.0);
     if seen.len() > MAX_DRAWN {
-        // (The nearest the middle, in no order: they are sorted far to near next.)
-        seen.select_nth_unstable_by(MAX_DRAWN, |a, b| a.0.distance_sq(middle).total_cmp(&b.0.distance_sq(middle)));
+        // (The nearest the camera, in no order: they are sorted far to near next. Straight down
+        // that is the nearest the middle.)
+        seen.select_nth_unstable_by(MAX_DRAWN, |a, b| a.0.total_cmp(&b.0));
         seen.truncate(MAX_DRAWN);
     }
     // The far ones first: a nearer house stands in front.
@@ -800,15 +815,14 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
     let theme = crate::holo::theme();
     let (accent, ink) = (theme.accent(), theme.ink());
     let upright = seen.len() <= EDGES_UP_TO;
-    let (metre, eye, on_ground) = (flat.px_per_km() / 1000.0, flat.eye(), flat.grounder());
     let storeys = seen.len() <= STOREYS_UP_TO;
     let mut panes = 0;
     let mut light = crate::holo::Light::new(p);
     let (mut ground, mut top, mut plan, mut walls): (Vec<Pos2>, Vec<Pos2>, Vec<[f64; 2]>, Vec<(f64, usize)>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for &(_, depth, b, grown) in &seen {
-        // (The far ones fall back into the deep.)
-        let strength = strength * dim(depth);
+        // (The far ones fall back into the deep; the one Sir asked for stands out wherever.)
         let picked = chosen.is_some_and(|c| b.holds(c));
+        let strength = strength * dim(depth) * if picked { 1.0 } else { behind(depth) };
         // The rise: the plate traced on the ground, then the walls up from it (fast, landing
         // softly) under a white-hot edge; then the storeys, the windows and the scale resolve.
         let trace = phase(grown, 0.0, 0.3);
@@ -1007,14 +1021,14 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
         }
         // (No label is narrower than 12 px: a roof that could hold none is not asked for one.)
         let settle = phase(grown, 0.8, 1.0);
-        if settle <= 0.0 || (b.reach * flat.world / depth) as f32 * 1.4 < 12.0 {
+        if settle <= 0.0 || depth > LABELS_TO || (b.reach * flat.world / depth) as f32 * 1.4 < 12.0 {
             continue;
         }
         let Some(label) = b.label(numbers) else { continue };
         let (centre, near) = screen(b.mid, b.top);
         let room = Rect::from_center_size(centre, vec2(label.chars().count() as f32 * 6.0 + 6.0, 13.0));
         if near >= model::NEAR && (b.reach * flat.world / depth) as f32 * 1.4 >= room.width() && map.contains_rect(room) && !taken.iter().any(|t| t.intersects(room)) {
-            crate::holo::text(p, centre, Align2::CENTER_CENTER, crate::holo::Face::Mono, &label, 9.5, crate::holo::a(ink, 0.85 * strength * dim(depth) * settle));
+            crate::holo::text(p, centre, Align2::CENTER_CENTER, crate::holo::Face::Mono, &label, 9.5, crate::holo::a(ink, 0.85 * strength * dim(depth) * behind(depth) * settle));
             taken.push(room);
         }
     }

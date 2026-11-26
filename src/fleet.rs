@@ -33,13 +33,21 @@ const ORDER_KEEPS: Duration = Duration::from_secs(600);
 pub const ONLINE_WITHIN: i64 = 90;
 /// This version's number ("3.4.1"): an update never goes back to an older one.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// This build as a friend reads it ("3.4.1 · 6cb2469"): what a PC tells Sir's, shown in his
+/// account dashboard, and said when asked ("which version are you on?").
+pub fn release() -> String {
+    format!("{VERSION} \u{b7} {}", BUILD.split('-').next().unwrap_or(BUILD))
+}
 /// The newest release, looked at every half hour by a client.
 const GITHUB_RELEASE: &str = "https://api.github.com/repos/JayKaey/JAI/releases/latest";
 /// The release's file that is J.A.I. himself on this system (`release.yml`).
 const RELEASE_ASSET: &str = if cfg!(windows) { "JAI.exe" } else { "jai-linux" };
 
-/// Orders Sir sent to an account's PC (by its name in lower case), until that PC fetches them.
-static ORDERS: LazyLock<Mutex<HashMap<String, Vec<(String, Instant)>>>> = LazyLock::new(Default::default);
+/// Orders Sir sent to an account's PCs (by its name in lower case), with the PCs that took each
+/// already: every PC the account is logged in on gets it once (Sir, 2026-11-26: "one account
+/// should be able to be locked into more than one PC").
+static ORDERS: LazyLock<Mutex<HashMap<String, Vec<(String, Instant, Vec<String>)>>>> = LazyLock::new(Default::default);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -145,16 +153,26 @@ pub fn send(db: &str, args: &Value) -> Result<String, String> {
     let online = crate::accounts::now().saturating_sub(seen) < ONLINE_WITHIN;
     // (A test session sends nothing to a real PC.)
     if !crate::platform::in_test_session() && !crate::live_self_tester::dry() {
-        lock(&ORDERS).entry(account.name.to_lowercase()).or_default().push((order.clone(), Instant::now()));
+        lock(&ORDERS).entry(account.name.to_lowercase()).or_default().push((order.clone(), Instant::now(), Vec::new()));
     }
     info!("[FLEET] '{order}' for {}'s PC ({})", account.name, if online { "online" } else { "offline" });
     let later = if online { "" } else { " It is offline: it gets it within ten minutes of coming back." };
     Ok(say(format!("Sent to {}'s PC: \"{order}\".{later}", account.name), format!("Sent to {}'s PC, Sir.{later}", account.name)))
 }
 
-/// The orders waiting for an account's PC (taken).
-fn take(name: &str) -> Vec<String> {
-    lock(&ORDERS).remove(&name.to_lowercase()).unwrap_or_default().into_iter().filter(|(_, at)| at.elapsed() < ORDER_KEEPS).map(|(order, _)| order).collect()
+/// The orders waiting for this PC (`pc`: its id) of an account: each taken once by each PC.
+fn take(name: &str, pc: &str) -> Vec<String> {
+    let mut orders = lock(&ORDERS);
+    let Some(waiting) = orders.get_mut(&name.to_lowercase()) else { return Vec::new() };
+    waiting.retain(|(_, at, _)| at.elapsed() < ORDER_KEEPS);
+    waiting
+        .iter_mut()
+        .filter(|(_, _, took)| !took.iter().any(|t| t == pc))
+        .map(|(order, _, took)| {
+            took.push(pc.to_string());
+            order.clone()
+        })
+        .collect()
 }
 
 /// What another PC did, as Sir's PC heard it (`events`), for the rules and protocols that wait
@@ -167,17 +185,18 @@ pub enum PcEvent {
     Stops(String),
 }
 
-/// Each account's PC as Sir's PC last heard of it (by its name in lower case): when, and the
-/// game it played.
-static SEEN: LazyLock<Mutex<HashMap<String, (Instant, Option<String>)>>> = LazyLock::new(Default::default);
+/// Each PC of each account as Sir's PC last heard of it (the account's name in lower case, the
+/// PC's id): when, and the game it played. (Two PCs of one account: one's game is not ended by
+/// the other's calls.)
+static SEEN: LazyLock<Mutex<HashMap<(String, String), (Instant, Option<String>)>>> = LazyLock::new(Default::default);
 /// What the PCs did since the rules last looked.
 static EVENTS: Mutex<Vec<(String, PcEvent)>> = Mutex::new(Vec::new());
 
 /// Notes a client's call: online again, a game started or ended. (`learning`: in the first
 /// minutes after this J.A.I. started nobody knows what was before, so a PC is only noted.)
-fn note(name: &str, game: Option<String>, learning: bool) {
+fn note(name: &str, pc: &str, game: Option<String>, learning: bool) {
     let name = name.to_lowercase();
-    let before = lock(&SEEN).insert(name.clone(), (Instant::now(), game.clone()));
+    let before = lock(&SEEN).insert((name.clone(), pc.to_string()), (Instant::now(), game.clone()));
     if learning && before.is_none() {
         return;
     }
@@ -197,13 +216,14 @@ fn note(name: &str, game: Option<String>, learning: bool) {
 
 /// Whether an account's PC called since `since`.
 pub fn heard_since(name: &str, since: Instant) -> bool {
-    lock(&SEEN).get(&name.to_lowercase()).is_some_and(|(at, _)| *at >= since)
+    let name = name.to_lowercase();
+    lock(&SEEN).iter().any(|((n, _), (at, _))| *n == name && *at >= since)
 }
 
 /// What the PCs did since the last call; one unheard of for `ONLINE_WITHIN` has gone offline.
 pub fn events() -> Vec<(String, PcEvent)> {
     let mut events = std::mem::take(&mut *lock(&EVENTS));
-    lock(&SEEN).retain(|name, (at, game)| {
+    lock(&SEEN).retain(|(name, _), (at, game)| {
         let gone = at.elapsed().as_secs() >= ONLINE_WITHIN as u64;
         if gone {
             events.extend(game.take().map(|g| (name.clone(), PcEvent::Stops(g))));
@@ -216,9 +236,9 @@ pub fn events() -> Vec<(String, PcEvent)> {
 
 /// Sir's PC answers a client's call: what Sir sent it, his voice print, the build to run, what
 /// its account may (Sir's switches, which that PC follows), and whether his sign-in there holds.
-pub fn hello(db: &str, name: &str, body: &Value) -> Value {
+pub fn hello(db: &str, name: &str, pc: &str, body: &Value) -> Value {
     let game = body["game"].as_str().map(str::trim).filter(|g| !g.is_empty()).map(String::from);
-    note(name, game, crate::PROCESS_START.elapsed().as_secs() < ONLINE_WITHIN as u64);
+    note(name, pc, game, crate::PROCESS_START.elapsed().as_secs() < ONLINE_WITHIN as u64);
     for done in body["done"].as_array().into_iter().flatten() {
         if let Some(order) = done.as_str() {
             crate::hud_notify::record(&format!("{name}'s PC has \"{order}\"."), false);
@@ -230,7 +250,7 @@ pub fn hello(db: &str, name: &str, body: &Value) -> Value {
     crate::wake_pc::learn(name, body);
     let account = crate::accounts::get(db, name).map(|a| crate::accounts::Account { devices: Vec::new(), ..a });
     let admin = body["admin"].as_str().is_some_and(crate::admin::holds);
-    json!({ "orders": take(name), "sir": crate::speaker_id::print_to_share(db), "build": BUILD, "version": VERSION, "os": std::env::consts::OS, "account": account, "admin": admin })
+    json!({ "orders": take(name, pc), "sir": crate::speaker_id::print_to_share(db), "build": BUILD, "version": VERSION, "os": std::env::consts::OS, "account": account, "admin": admin })
 }
 
 /// How this PC is, in a line for Sir's list.
@@ -301,7 +321,7 @@ pub async fn client(app: Jai) {
         let admin = crate::admin::key_held();
         // (The game it plays: for Sir's rules and protocols that wait on this PC.)
         let game = crate::vram_guard::game_now().map(|(game, _)| game);
-        let body = json!({ "kind": "pc", "device": pc_name(), "version": BUILD, "stats": stats(&app), "done": done, "print": crate::speaker_id::print_to_share(&db), "admin": admin, "game": game, "mac": crate::wake_pc::this_pc_mac() });
+        let body = json!({ "kind": "pc", "device": pc_name(), "version": release(), "stats": stats(&app), "done": done, "print": crate::speaker_id::print_to_share(&db), "admin": admin, "game": game, "mac": crate::wake_pc::this_pc_mac() });
         let answer = match http.post(format!("{main}/api/pc")).header("X-JAI-Key", &key).json(&body).send().await {
             Ok(r) if r.status().as_u16() == 403 || r.status().as_u16() == 401 => {
                 // The account is gone, paused or its key no longer holds: log in again.
@@ -426,7 +446,7 @@ fn address(main: &str) -> Result<String, String> {
 pub async fn log_in(config: &ConfigStore, main: &str, name: &str, password: &str, key: Option<&str>) -> Result<String, String> {
     let main = address(main)?;
     let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build().map_err(|e| e.to_string())?;
-    let mut body = json!({ "name": name, "password": password, "kind": "pc", "device": pc_name(), "version": BUILD });
+    let mut body = json!({ "name": name, "password": password, "kind": "pc", "device": pc_name(), "version": release() });
     let path = match key {
         Some(k) => {
             body["key"] = json!(k.replace(' ', ""));
@@ -519,9 +539,12 @@ mod tests {
 
     #[test]
     fn an_order_waits_for_its_pc_and_is_taken_once() {
-        lock(&ORDERS).insert("erika".into(), vec![("open the earth".into(), Instant::now()), ("old".into(), Instant::now() - ORDER_KEEPS - Duration::from_secs(1))]);
-        assert_eq!(take("Erika"), vec!["open the earth".to_string()], "the stale one is dropped");
-        assert!(take("erika").is_empty(), "taken once");
+        lock(&ORDERS).insert("erika".into(), vec![("open the earth".into(), Instant::now(), Vec::new()), ("old".into(), Instant::now() - ORDER_KEEPS - Duration::from_secs(1), Vec::new())]);
+        assert_eq!(take("Erika", "desk0001"), vec!["open the earth".to_string()], "the stale one is dropped");
+        assert!(take("erika", "desk0001").is_empty(), "taken once");
+        // (Her laptop, logged in with the same account, gets it too: once.)
+        assert_eq!(take("erika", "lap00002"), vec!["open the earth".to_string()]);
+        assert!(take("erika", "lap00002").is_empty());
         assert!(runs_here(&[b"MZ".as_slice(), &vec![0u8; 1_000_001]].concat()) == cfg!(windows));
         assert!(!runs_here(b"<html>not found</html>"));
     }
@@ -530,20 +553,26 @@ mod tests {
     #[test]
     fn another_pc_coming_playing_and_going_is_heard_once() {
         let heard = || events().into_iter().filter(|(name, _)| name == "erika").map(|(_, e)| e).collect::<Vec<_>>();
-        note("Erika", None, true);
+        note("Erika", "desk0001", None, true);
         assert!(heard().is_empty(), "just after J.A.I. started a PC is only noted");
-        note("Erika", Some("Minecraft".into()), false);
+        note("Erika", "desk0001", Some("Minecraft".into()), false);
         assert_eq!(heard(), [PcEvent::Plays("Minecraft".into())]);
-        note("erika", Some("Minecraft".into()), false);
+        note("erika", "desk0001", Some("Minecraft".into()), false);
         assert!(heard().is_empty(), "the same game again is no news");
-        note("Erika", None, false);
+        // (Her laptop calling without a game ends nothing on her desktop.)
+        note("Erika", "lap00002", None, false);
+        assert_eq!(heard(), [PcEvent::Online]);
+        note("erika", "desk0001", Some("Minecraft".into()), false);
+        assert!(heard().is_empty());
+        lock(&SEEN).remove(&("erika".to_string(), "lap00002".to_string()));
+        note("Erika", "desk0001", None, false);
         assert_eq!(heard(), [PcEvent::Stops("Minecraft".into())]);
-        note("Erika", Some("Fortnite".into()), false);
+        note("Erika", "desk0001", Some("Fortnite".into()), false);
         assert_eq!(heard(), [PcEvent::Plays("Fortnite".into())]);
         // Unheard of for ONLINE_WITHIN: gone, its game with it.
-        lock(&SEEN).get_mut("erika").expect("noted").0 = Instant::now().checked_sub(Duration::from_secs(ONLINE_WITHIN as u64)).expect("a clock");
+        lock(&SEEN).get_mut(&("erika".to_string(), "desk0001".to_string())).expect("noted").0 = Instant::now().checked_sub(Duration::from_secs(ONLINE_WITHIN as u64)).expect("a clock");
         assert_eq!(heard(), [PcEvent::Stops("Fortnite".into()), PcEvent::Offline]);
-        note("Erika", None, false);
+        note("Erika", "desk0001", None, false);
         assert_eq!(heard(), [PcEvent::Online]);
     }
 }

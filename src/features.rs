@@ -227,6 +227,8 @@ static CLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(\d{1,2})(?:
 static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"https?://[^\s"'<>]+"#).unwrap());
 static SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)from\s+(\d{1,2}:\d{2}(?::\d{2})?)\s+(?:to|until|till|-)\s+(\d{1,2}:\d{2}(?::\d{2})?)").unwrap());
 static SECONDS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(\d{1,3})\s*(seconds?|secs?|minutes?|mins?)\b").unwrap());
+/// "in 20 minutes", "in an hour", "in 1.5 hours", "in einer Stunde".
+static IN_TIME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bin\s+(\d{1,3}(?:[.,]\d)?|an?|one|half an|einer halben|einer|eine)\s+(hours?|minutes?|mins?|stunden?|minuten?)\b").unwrap());
 
 fn has(lower: &str, phrases: &[&str]) -> bool {
     phrases.iter().any(|p| lower.contains(p))
@@ -395,25 +397,56 @@ pub fn route_text(text: &str) -> Option<Route> {
         return verbatim("smart_folder_cleanup", json!({ "target_folder": folder, "dry_run_first": true }));
     }
 
-    // ---- Smart Alarm ----
+    // ---- Alarms ----
+    // (While one rings: "snooze", "I'm up", "turn it off".)
+    let ringing = crate::smart_alarm::ringing();
+    if has(&lower, &["snooze", "schlummer"]) && (ringing || has(&lower, &["alarm", "wecker"])) {
+        return verbatim("set_smart_morning_alarm", json!({ "action": "snooze" }));
+    }
+    if ringing && (has(&lower, &["i'm up", "i am up", "i'm awake", "i am awake", "ich bin wach", "ich bin auf"]) || matches!(ws.iter().map(String::as_str).collect::<Vec<_>>().as_slice(), ["turn", "it", "off"] | ["stop", "it"] | ["ok"] | ["okay"])) {
+        return verbatim("set_smart_morning_alarm", json!({ "action": "stop" }));
+    }
     if has(&lower, &["alarm", "wake me", "weck mich", "wecker"]) {
-        if has(&lower, &["cancel", "delete", "remove", "turn off", "switch off", "no alarm", "lösch"]) {
-            return verbatim("set_smart_morning_alarm", json!({ "action": "cancel" }));
-        }
-        if ws.iter().any(|w| w == "list") || has(&lower, &["what alarm", "which alarm", "my alarms", "is my alarm", "when is my alarm"]) {
-            return verbatim("set_smart_morning_alarm", json!({ "action": "list" }));
-        }
-        let setting = has(&lower, &["wake me", "weck mich", "set an alarm", "set alarm", "set the alarm", "set my alarm", "alarm for", "alarm at", "new alarm", "an alarm", "wecker auf", "wecker für", "stell"]);
-        if let Some(c) = CLOCK.captures(&lower).filter(|_| setting) {
+        // ("Cancel the 7 pm alarm": only that one.)
+        let time = |c: regex::Captures| -> Option<String> {
             let mut hour: u32 = c[1].parse().ok()?;
             let minute: u32 = c.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
             if c.get(3).is_some_and(|m| m.as_str().starts_with('p')) && hour < 12 {
                 hour += 12;
             }
-            if hour < 24 && minute < 60 {
+            (hour < 24 && minute < 60).then(|| format!("{hour:02}:{minute:02}"))
+        };
+        if has(&lower, &["cancel", "delete", "remove", "turn off", "switch off", "no alarm", "lösch", "stop the alarm", "alarm off", "wecker aus"]) {
+            return verbatim("set_smart_morning_alarm", match CLOCK.captures(&lower).and_then(time) {
+                Some(at) => json!({ "action": "cancel", "wake_time": at }),
+                None => json!({ "action": "cancel" }),
+            });
+        }
+        if ws.iter().any(|w| w == "list") || has(&lower, &["what alarm", "which alarm", "my alarms", "is my alarm", "when is my alarm"]) {
+            return verbatim("set_smart_morning_alarm", json!({ "action": "list" }));
+        }
+        let setting = has(&lower, &["wake me", "weck mich", "set an alarm", "set alarm", "set the alarm", "set my alarm", "alarm for", "alarm at", "alarm in", "new alarm", "an alarm", "wecker auf", "wecker für", "wecker in", "stell"]);
+        // "In 20 minutes", "in an hour", "in 1.5 hours": from now.
+        if let Some(c) = IN_TIME.captures(&lower).filter(|_| setting) {
+            let n: f64 = match &c[1] {
+                "a" | "an" | "one" | "einer" | "eine" => 1.0,
+                "half an" | "einer halben" => 0.5,
+                n => n.replace(',', ".").parse().ok()?,
+            };
+            let minutes = if c[2].starts_with('h') || c[2].starts_with("stunde") { n * 60.0 } else { n };
+            let label = after(text, &lower, &[" to remind me to ", " to remind me ", " so i can ", " damit ich "]);
+            return verbatim("set_smart_morning_alarm", json!({ "in_minutes": minutes.round(), "label": label.unwrap_or("") }));
+        }
+        if let Some(c) = CLOCK.captures(&lower).filter(|_| setting) {
+            let end = c.get(0).map_or(0, |m| m.end());
+            if let Some(at) = time(c) {
                 let playlist = after(text, &lower, &["playlist ", "play ", "with "]).map(|s| s.split_whitespace().next().unwrap_or(s).trim_end_matches(['.', ',']).to_string());
                 let adjust = !has(&lower, &["don't adjust", "do not adjust", "no matter what", "fixed"]);
-                return verbatim("set_smart_morning_alarm", json!({ "wake_time": format!("{hour:02}:{minute:02}"), "adjust_for_cancelled_classes": adjust, "playlist_name": playlist }));
+                // "… at 7 pm to call mum": what it is for, after the time. ("For school" is
+                // why he gets up, no label: a wake-up stays one.)
+                let rest = text.get(end..).unwrap_or("").trim();
+                let label = ["to remind me to ", "to remind me ", "to ", "um "].iter().find_map(|m| rest.to_lowercase().starts_with(m).then(|| rest.get(m.len()..).unwrap_or("").trim().trim_end_matches(['.', '!', '?']))).filter(|l| !l.is_empty());
+                return verbatim("set_smart_morning_alarm", json!({ "wake_time": at, "adjust_for_cancelled_classes": adjust, "playlist_name": playlist, "label": label.unwrap_or("") }));
             }
         }
     }
@@ -773,6 +806,23 @@ mod tests {
         assert_eq!(xdg_dir(text, "Pictures", home), Some(home.join("Bilder")));
         assert_eq!(xdg_dir(text, "Music", home), None);
         assert_eq!(xdg_dir(text, "Screenshots", home), None);
+    }
+
+    /// Sir, 2026-11-26: "JAI should be able to set alarms": for any time, in so many minutes,
+    /// for something; one cancelled by its time.
+    #[test]
+    fn alarms_by_his_word() {
+        let args = |said: &str| route_text(said).map(|r| (r.tool, r.args)).expect(said);
+        let (tool, a) = args("Set an alarm in 20 minutes.");
+        assert_eq!((tool, a["in_minutes"].as_f64()), ("set_smart_morning_alarm", Some(20.0)));
+        assert_eq!(args("wake me in an hour").1["in_minutes"], 60.0);
+        assert_eq!(args("Stell einen Wecker in 1,5 Stunden").1["in_minutes"], 90.0);
+        let a = args("Set an alarm for 7 pm to call mum.").1;
+        assert_eq!((a["wake_time"].as_str(), a["label"].as_str()), (Some("19:00"), Some("call mum")));
+        assert_eq!(args("wake me at 6:30 for school").1["label"], "", "why he gets up is no label");
+        assert_eq!(args("Cancel the 7 pm alarm").1, json!({"action": "cancel", "wake_time": "19:00"}));
+        assert_eq!(args("cancel my alarms").1, json!({"action": "cancel"}));
+        assert_eq!(args("snooze the alarm").1, json!({"action": "snooze"}));
     }
 
     #[test]

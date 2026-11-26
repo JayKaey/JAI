@@ -209,6 +209,64 @@ pub static APPS: &[AppSpec] = &[
         linux: &["bin:systemsettings|kcm_networkmanagement"],
         processes: &["systemsettings"],
     },
+    // The system's own places, by the words Sir uses for them (Sir, 2026-11-26: "when i say
+    // \"JAI open the trash bin\" than he should open my windows trash bin").
+    AppSpec {
+        id: "recycle_bin",
+        display: "the recycle bin",
+        aliases: &["recycle bin", "trash", "trash bin", "trash can", "trashcan", "bin", "garbage", "garbage bin", "garbage can", "rubbish bin", "wastebasket", "waste basket", "papierkorb", "mülleimer", "muelleimer", "abfalleimer"],
+        windows: &["uri:shell:RecycleBinFolder"],
+        linux: &["bin:dolphin|trash:/", "bin:nautilus|trash:///", "url:trash:/"],
+        processes: &[],
+    },
+    AppSpec {
+        id: "this_pc",
+        display: "This PC",
+        aliases: &["this pc", "my computer", "my pc", "computer", "dieser pc", "arbeitsplatz", "mein computer", "drives", "laufwerke"],
+        windows: &["uri:shell:MyComputerFolder"],
+        linux: &["bin:dolphin|/", "xdg:/"],
+        processes: &[],
+    },
+    AppSpec {
+        id: "control_panel",
+        display: "the Control Panel",
+        aliases: &["control panel", "systemsteuerung"],
+        windows: &["exe:control.exe"],
+        linux: &["bin:systemsettings", "bin:gnome-control-center"],
+        processes: &[],
+    },
+    AppSpec {
+        id: "device_manager",
+        display: "the Device Manager",
+        aliases: &["device manager", "devices", "hardware manager", "geräte manager", "gerätemanager", "geraete manager"],
+        windows: &["exe:devmgmt.msc"],
+        linux: &["bin:kinfocenter", "bin:hardinfo"],
+        processes: &[],
+    },
+    AppSpec {
+        id: "apps_settings",
+        display: "the installed apps",
+        aliases: &["installed apps", "installed programs", "programs and features", "uninstall a program", "apps and features", "installierte apps", "installierte programme"],
+        windows: &["uri:ms-settings:appsfeatures"],
+        linux: &["bin:plasma-discover", "bin:gnome-software"],
+        processes: &[],
+    },
+    AppSpec {
+        id: "startup_apps",
+        display: "the startup apps",
+        aliases: &["startup apps", "startup programs", "autostart", "autostart apps", "autostart programme"],
+        windows: &["uri:ms-settings:startupapps"],
+        linux: &["bin:systemsettings|kcm_autostart"],
+        processes: &[],
+    },
+    AppSpec {
+        id: "update_settings",
+        display: "Windows Update",
+        aliases: &["windows update", "updates", "system updates", "windows updates", "update settings"],
+        windows: &["uri:ms-settings:windowsupdate"],
+        linux: &["bin:plasma-discover|--mode update", "bin:gnome-software|--mode=updates"],
+        processes: &[],
+    },
     AppSpec {
         id: "paint",
         display: "Paint",
@@ -481,10 +539,44 @@ pub async fn open(name: &str, args: &[String]) -> Result<String, String> {
         launch_target(&format!("aumid:{aumid}"), args).await?;
         return Ok(format!("Opened {app_name}."));
     }
+    // No app by that name, but a kind of app ("my mail", "the video editor"): the one of that
+    // kind that is installed. (Sir, 2026-11-26: "JAI should guess when i want him to open apps
+    // or so and he doesn't find apps with the exact name on my pc".)
+    let q = query.clone();
+    if let Some((kind, entry)) = tokio::task::spawn_blocking(move || guess(&q, crate::appindex::lookup)).await.ok().flatten() {
+        launch_entry(&entry, args).await?;
+        info!("[TOOL] '{label}' taken as {} (the installed {kind})", entry.name);
+        return Ok(format!("Opened {}: the {kind} installed here.", entry.name));
+    }
     // Nothing by that name: the closest installed name is suggested, not started ("open teams" → Steam).
     let q = query.clone();
     let closest = tokio::task::spawn_blocking(move || crate::appindex::nearest(&q)).await.ok().flatten();
     Err(not_found(&label, closest.as_ref().map(|e| e.name.as_str())))
+}
+
+/// Kinds of app by the words Sir uses for them, and the apps of each kind, the likeliest first.
+const KINDS: &[(&str, &[&str], &[&str])] = &[
+    ("mail app", &["mail", "email", "e-mail", "emails", "mails", "inbox", "mail app", "email app", "posteingang", "e-mails"], &["outlook", "thunderbird", "betterbird", "mail", "kmail", "evolution"]),
+    ("photo editor", &["photo editor", "image editor", "picture editor", "photo editing", "bildbearbeitung", "bildbearbeitungsprogramm"], &["photoshop", "affinity photo", "gimp", "krita", "paint.net"]),
+    ("video editor", &["video editor", "video editing", "videobearbeitung", "videoschnitt", "schnittprogramm"], &["davinci resolve", "premiere pro", "capcut", "shotcut", "kdenlive", "clipchamp"]),
+    ("notes app", &["notes", "notes app", "note app", "my notes", "notizen", "notiz app"], &["obsidian", "onenote", "notion", "joplin", "sticky notes"]),
+    ("spreadsheet app", &["spreadsheet", "spreadsheets", "tabellenkalkulation"], &["excel", "libreoffice calc"]),
+    ("presentation app", &["presentation", "presentations", "slides", "präsentation", "praesentation"], &["powerpoint", "libreoffice impress"]),
+    ("PDF reader", &["pdf", "pdf reader", "pdf viewer", "pdf app"], &["acrobat", "adobe acrobat", "sumatrapdf", "foxit pdf reader", "okular"]),
+    ("video player", &["video player", "media player", "movie player", "videoplayer", "mediaplayer"], &["vlc", "mpv", "mpc-hc", "media player", "haruna"]),
+    ("game launcher", &["games", "my games", "game launcher", "spiele", "meine spiele"], &["steam", "epic games launcher", "playnite", "gog galaxy", "battle.net", "heroic", "lutris"]),
+    ("password manager", &["passwords", "password manager", "passwörter", "passwort manager"], &["bitwarden", "1password", "keepassxc", "keepass"]),
+    ("screenshot tool", &["screenshot tool", "snipping", "screen capture", "screenshot app", "bildschirmfoto"], &["snipping tool", "sharex", "spectacle", "flameshot"]),
+    ("screen recorder", &["screen recorder", "recorder", "recording app", "streaming app", "bildschirmaufnahme"], &["obs studio", "obs"]),
+    ("3D app", &["3d", "3d app", "3d modeling", "modelling app", "modeling app"], &["blender"]),
+    ("VPN", &["vpn"], &["nordvpn", "proton vpn", "mullvad vpn", "surfshark"]),
+];
+
+/// The app of the kind `query` names that `installed` finds (it looks a name up among the
+/// installed apps): the kind, and the app.
+fn guess<T>(query: &str, installed: impl Fn(&str) -> Option<T>) -> Option<(&'static str, T)> {
+    let (kind, _, apps) = KINDS.iter().find(|(_, words, _)| words.contains(&query))?;
+    apps.iter().find_map(|app| installed(app)).map(|entry| (*kind, entry))
 }
 
 /// The answer when no app has that name: the closest one only as a suggestion, never launched;
@@ -1170,6 +1262,24 @@ pub async fn close(name: &str, force: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sir, 2026-11-26: "JAI, can you open my trash bin?" was answered "I'm afraid I couldn't
+    /// find Trash Bin on this machine". The system's places go by the words he uses, and a kind
+    /// of app ("my mail") opens the one of that kind installed here, the likeliest first.
+    #[test]
+    fn the_systems_places_and_kinds_of_app_by_everyday_words() {
+        for name in ["trash bin", "my trash bin", "the trash", "Papierkorb", "recycle bin", "the bin", "trash can"] {
+            assert_eq!(find_spec(name).map(|s| s.id), Some("recycle_bin"), "{name}");
+        }
+        assert_eq!(find_spec("this pc").map(|s| s.id), Some("this_pc"));
+        assert_eq!(find_spec("control panel").map(|s| s.id), Some("control_panel"));
+        assert_eq!(find_spec("Gerätemanager").map(|s| s.id), Some("device_manager"));
+        let installed = |have: &'static [&'static str]| move |name: &str| have.contains(&name).then(|| name.to_string());
+        assert_eq!(guess(&normalize("my mail"), installed(&["thunderbird", "outlook"])), Some(("mail app", "outlook".to_string())));
+        assert_eq!(guess(&normalize("the video editor"), installed(&["kdenlive"])), Some(("video editor", "kdenlive".to_string())));
+        assert_eq!(guess("mail", installed(&["steam"])), None, "none of that kind here: no guess");
+        assert_eq!(guess("teams", installed(&["steam"])), None, "a name is no kind");
+    }
 
     /// Goon mode (Sir, 2026-11-21): a private window of whatever browser is his default, by that
     /// browser's own switch; "Private Internet Access" stays an app.

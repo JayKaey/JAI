@@ -130,7 +130,7 @@ impl VirtualHud {
         match name {
             "console" => {
                 self.hud.console_open = open;
-                self.hud.console_focus = open;
+                lock(&self.hud.console).focus = open;
             }
             "core" => self.hud.core_open = open,
             "history" => self.hud.history_open = open,
@@ -153,12 +153,12 @@ impl VirtualHud {
 
     /// Text into the console's input line (the completions follow it).
     pub(crate) fn type_in_console(&mut self, text: &str) {
-        self.hud.console_input = text.to_string();
+        lock(&self.hud.console).input = text.to_string();
     }
 
     /// What stands in the console's input line.
     pub(crate) fn console_line(&self) -> String {
-        self.hud.console_input.clone()
+        lock(&self.hud.console).input.clone()
     }
 
     /// The Feature Lab's `[ TRY ]` for a feature a HUD control drives: opens that control.
@@ -176,7 +176,7 @@ impl VirtualHud {
     pub(crate) fn close_controls(&mut self) {
         self.hud.screens_open = false;
         self.hud.console_open = false;
-        self.hud.console_input.clear();
+        lock(&self.hud.console).input.clear();
         theme_studio::close();
         mixer_view::close();
     }
@@ -209,7 +209,7 @@ impl VirtualHud {
 
     /// The console's completions for its current line.
     pub(crate) fn completions(&self) -> Vec<String> {
-        self.hud.completions.1.clone()
+        lock(&self.hud.console).completions.1.clone()
     }
 
     // -------------------------------------------------------------------------- input ----

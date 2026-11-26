@@ -779,6 +779,7 @@ impl Hub {
             });
             crate::holo_ui::toggle(ui, &mut q.acoustic.knock_alert, "Door-knock alert");
             crate::holo_ui::toggle(ui, &mut q.acoustic.knock_only_with_music, "only while music plays");
+            crate::holo_ui::toggle(ui, &mut q.acoustic.bless_sneezes, "\"Bless you\" when you sneeze");
         });
         ui.add(crate::holo_ui::Slider::new(&mut q.acoustic.sensitivity, 0.5..=2.0).text("sensitivity"));
 

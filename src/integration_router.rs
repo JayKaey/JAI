@@ -49,8 +49,9 @@ fn words(text: &str) -> Vec<String> {
 /// calendar), so a fuzzy hit must also start like the target and differ by at most two edits.
 fn fuzzy_has(ws: &[String], targets: &[&str]) -> bool {
     // Real words one or two letters from a keyword: "Terminal" is no "Termine" (2026-11-07 it
-    // read his calendar), "then" no "when".
-    const NEVER_FUZZY: &[&str] = &["terminal", "terminals", "terminate", "terminated", "termination", "determine", "then", "than", "thee"];
+    // read his calendar), "then" no "when", "main" no "mail" ("move the protocol window to my main
+    // monitor" read his inbox, 2026-11-22).
+    const NEVER_FUZZY: &[&str] = &["terminal", "terminals", "terminate", "terminated", "termination", "determine", "then", "than", "thee", "main", "mall"];
     ws.iter().any(|w| {
         targets.iter().any(|t| {
             let same_start = w.chars().take(2).eq(t.chars().take(2));
@@ -556,6 +557,8 @@ mod tests {
         let add = route_text("Schedule a meeting with Max next Friday at 10 AM").unwrap();
         assert_eq!(add.args["title"], "Meeting with Max");
         assert_eq!(tool("do i have any new emails?"), Some("check_unread_emails"));
+        // (jai.log, 2026-11-22: it read his inbox and the window stayed.)
+        assert_eq!(tool("move the protocol window to my main monitor"), None);
         assert_eq!(tool("any new whatsapp messages?"), Some("check_whatsapp_messages"));
         assert_eq!(tool("send that to Max on WhatsApp"), None);
         assert_eq!(tool("how can i use you from my phone"), Some("show_mobile_satellite_instructions"));

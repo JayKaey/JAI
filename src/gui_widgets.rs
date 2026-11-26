@@ -1067,3 +1067,37 @@ fn resize_grip(ctx: &egui::Context, p: &Palette, id: &str) {
         response.on_hover_cursor(egui::CursorIcon::ResizeSouthEast);
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The contacts window as he sees it (Sir, 2026-11-26: "the contacts window looks wrong"):
+    /// one card per person, the name in the accent over what reaches them, nothing cut or on top
+    /// of something else, and no second "Contacts" heading under the window's bar.
+    #[test]
+    fn snapshot_contacts_window_reads_as_cards() {
+        let _look = crate::holo_theme::look_for_pictures();
+        let people = [
+            crate::contacts::Contact { name: "Max Mustermann".into(), phone_number: "+491512345678".into(), email: "max@example.com".into(), priority: true, ..Default::default() },
+            crate::contacts::Contact { name: "Erika Musterfrau".into(), nickname: "Eri".into(), whatsapp_name: "Erika M".into(), phone_number: "+4930123456".into(), ..Default::default() },
+            crate::contacts::Contact { name: "Musterstadt Pizza".into(), ..Default::default() },
+        ];
+        let markdown = crate::contacts::window_markdown(&people);
+        assert!(!markdown.contains("## ") && !markdown.contains("- "), "{markdown}");
+        let p = Palette::new(&crate::interface::InterfaceSettings::default());
+        let size = vec2(480.0, 300.0);
+        let mut stage = crate::visual_ui_verifier::Stage::new(size);
+        let frame = stage.frames(2, &mut |ctx| {
+            crate::holo::install_fonts(ctx);
+            egui::CentralPanel::default().frame(Frame::none().inner_margin(Margin::same(14.0))).show(ctx, |ui| markdown_view(ui, &p, &markdown, p.accent));
+        });
+        stage.raster(&frame).save("panel_contacts");
+        for name in ["Max Mustermann", "Erika Musterfrau", "Musterstadt Pizza", "+491512345678", "WhatsApp"] {
+            assert!(!frame.find_text(name).is_empty(), "{name} is not shown:\n{}", frame.all_text());
+        }
+        assert_eq!(crate::visual_ui_verifier::text_over_text(&frame), Vec::<String>::new());
+        assert_eq!(crate::visual_ui_verifier::clipped_text(&frame), Vec::<String>::new());
+        assert!(crate::contacts::window_markdown(&[]).starts_with("No contacts saved yet."));
+    }
+}

@@ -45,7 +45,7 @@ pub const JAI_CAPABILITY_MANIFEST: &[CapabilityCategory] = &[
     CapabilityCategory { name: "Workout coach", summary: "Detect calendar workout entries such as Arme, record sets/reps/weights, estimate one-repetition personal records, display strength progression and share persistent rest timers between desktop and phone.", tools: &["manage_workout"] },
     CapabilityCategory { name: "Worldwide phone and remote PC", summary: "Token-protected mobile satellite with local and public HTTPS pairing URLs and QR codes; live CPU/GPU/process telemetry; remote locking, sleep, protocol execution and configured Wake-on-LAN. Internet access requires an active tunnel; waking a sleeping host requires another reachable device or relay.", tools: &["get_remote_pc_status", "control_remote_pc", "manage_remote_node", "manage_location_settings", "beam_to_device", "scan_with_phone", "teleport_content"] },
     CapabilityCategory { name: "Communication and contacts", summary: "Configured email and WhatsApp inboxes, summaries, search, contacts, explicit messages/replies, unified inbox and auto-responder controls; JAI's own Discord account (Sir's DMs are orders, friends get answers, he joins voice calls as himself, posts, reads and summarises); Away Mode (answering machine, alerts to Sir's phone, welcome-back digest).", tools: &["check_unread_emails", "summarize_email", "search_emails", "send_whatsapp_message", "check_whatsapp_messages", "reply_to_last_whatsapp", "manage_contacts", "check_all_communications", "set_auto_responder", "discord_bot", "away_mode"] },
-    CapabilityCategory { name: "Stark protocols, macros and reminders", summary: "Create and run saved app/music/window protocols, capture workspaces, teach multi-step voice macros, set reminders and timers, select spoken/text response modes, control the assistant lifecycle, take back the last change of his own ('Undo that'), tell what he just did and what is new in this build.", tools: &["manage_stark_protocol", "manage_voice_macro", "reminders", "set_response_modality", "control_jai_lifecycle", "shutdown_jai", "undo_last_action", "recent_actions", "whats_new", "whats_open", "timer_left"] },
+    CapabilityCategory { name: "Stark protocols, macros and reminders", summary: "Create and run saved app/music/window protocols, capture workspaces, teach multi-step voice macros, set reminders and timers, select spoken/text response modes and how he listens (his name only, when spoken to, hands-free), control the assistant lifecycle, take back the last change of his own ('Undo that'), tell what he just did and what is new in this build.", tools: &["manage_stark_protocol", "manage_voice_macro", "reminders", "set_response_modality", "set_listening_mode", "control_jai_lifecycle", "shutdown_jai", "undo_last_action", "recent_actions", "whats_new", "whats_open", "timer_left"] },
     CapabilityCategory { name: "Memory and learned skills", summary: "Store and recall facts, search conversation history, manage persistent skills and execute installed skill tools.", tools: &["remember_fact", "recall_memories", "delete_memory", "search_conversation", "create_skill", "execute_skill", "create_persistent_skill", "run_custom_skill", "list_skills", "delete_skill"] },
     CapabilityCategory { name: "Files, code and automation", summary: "Locate/read/write/edit files, undo edits, search source contents, run commands, generate projects, inspect source, apply self-improvements and perform reversible folder cleanup.", tools: &["find_files", "read_text_file", "create_or_overwrite_file", "edit_file_surgical", "undo_last_file_edit", "search_inside_files", "run_shell_command", "spawn_coding_project", "patch_own_source", "smart_folder_cleanup", "undo_last_cleanup", "run_sandbox_calculation_or_script", "diagnose_minecraft_or_server"] },
     CapabilityCategory { name: "Web, research and locations", summary: "Web search and page reading, connected websites, background research, location-aware weather, nearby places, routes and commute checks, network diagnosis and price watches.", tools: &["web_search", "read_webpage", "open_website", "query_connected_website", "start_background_research", "get_precise_location_weather", "find_nearby_places_or_route", "check_ride_and_commute_status", "diagnose_network_and_ping", "manage_price_sniper"] },
@@ -354,7 +354,7 @@ pub const ONLY_ASKED: &str = "Nothing was done: Sir asked a question and gave no
 pub fn only_looks(name: &str, args: &Value) -> bool {
     const BY_NAME: &[&str] = &["check_", "diagnose_", "find_", "get_", "inspect_", "list_", "lookup_", "read_", "recall_", "search_", "show_", "suggest_", "summarize_"];
     const LOOKING: &[&str] = &["more_tools", "chemistry_helper", "pop_up_ui_card", "run_executive_briefing", "run_sandbox_calculation_or_script", "screen_time_report", "spawn_topic_knowledge_workspace", "stress_test_idea_or_code", "thermal_advisor"];
-    const READ_ACTIONS: &[&str] = &["check", "due", "find", "get", "history", "info", "list", "overview", "query", "read", "recap", "recent", "recommend", "report", "search", "show", "stats", "status", "summary", "view"];
+    const READ_ACTIONS: &[&str] = &["check", "describe", "due", "find", "get", "history", "info", "list", "overview", "query", "read", "recap", "recent", "recommend", "report", "search", "show", "stats", "status", "summary", "view"];
     crate::hyper_cortex::is_read_only(name, args)
         || BY_NAME.iter().any(|prefix| name.starts_with(prefix))
         || LOOKING.contains(&name)
@@ -721,9 +721,10 @@ impl ToolContext {
                     .remember_fact(key.unwrap_or(""), value, str_arg(&args, &["category"]), int_arg(&args, "importance").map(|i| i as i32))
                     .map(|o| {
                         memories_changed = true;
-                        // "Call me Max": the title he uses on every line from now on.
-                        if crate::memory::is_address_key(&o.entry.key) && o.entry.value.split_whitespace().count() <= 4 {
-                            self.config.update(|c| c.interface.address = Some(o.entry.value.clone()));
+                        // "Call me Max": the title he uses on every line from now on ("Sir should
+                        // be addressed as Max." too: the settings and the memory never disagree).
+                        if let Some(name) = crate::memory::is_address_key(&o.entry.key).then(|| crate::memory::address_in(&o.entry.value)).flatten() {
+                            self.config.update(|c| c.interface.address = Some(name));
                         }
                         // (What it was, with its kind, is what "undo that" puts back: `undo::way_back`.)
                         match (o.previous_value, o.previous_kind) {
@@ -1000,22 +1001,34 @@ impl ToolContext {
             "control_audio_mixer" => crate::audio_mixer::tool(&args).await,
             "set_listening_mode" => {
                 let mode = str_arg(&args, &["mode", "listening_mode"]).unwrap_or("").to_lowercase().replace([' ', '-'], "_");
-                let required = match mode.as_str() {
-                    "hands_free" | "handsfree" | "always" | "open" | "freisprech" | "freisprechmodus" => Some(false),
-                    "wake_word" | "wakeword" | "wake" | "keyword" | "only_jai" | "aktivierungswort" => Some(true),
-                    _ => bool_arg(&args, "wake_word_required"),
+                // (wake word required, his name only)
+                let set = match mode.as_str() {
+                    "hands_free" | "handsfree" | "always" | "open" | "freisprech" | "freisprechmodus" => Some((false, false)),
+                    "wake_word" | "wakeword" | "wake" | "keyword" | "only_jai" | "name" | "name_only" | "aktivierungswort" => Some((true, true)),
+                    "when_spoken_to" | "spoken_to" | "talked_to" | "addressed" | "smart" | "angesprochen" => Some((true, false)),
+                    _ => bool_arg(&args, "wake_word_required").map(|required| (required, required)),
                 };
-                match required {
-                    Some(required) => {
-                        self.config.update(|c| c.wake_word_required = required);
+                let key = |required: bool, name_only: bool| match (required, name_only) {
+                    (false, _) => "hands_free",
+                    (true, true) => "wake_word",
+                    (true, false) => "when_spoken_to",
+                };
+                match set {
+                    Some((required, name_only)) => {
+                        let was = self.config.read(|c| key(c.wake_word_required, c.name_only));
+                        self.config.update(|c| {
+                            c.wake_word_required = required;
+                            c.name_only = name_only;
+                        });
                         state_changed = true;
-                        Ok(if required {
-                            "Listening mode: WAKE-WORD. JAI only answers when Sir says \"JAI\" (anywhere in the sentence).".to_string()
-                        } else {
-                            "Listening mode: HANDS-FREE. JAI answers relevant speech without the wake word; background talk, humming and fragments are ignored.".to_string()
-                        })
+                        let now = match key(required, name_only) {
+                            "wake_word" => "WAKE-WORD. JAI only answers a sentence with \"JAI\" in it (anywhere in the sentence), push-to-talk, or Sir talking over him.",
+                            "when_spoken_to" => "WHEN SPOKEN TO. JAI answers when he is spoken to: his name, a conversation still open, his window in front, or a clear order or question for him.",
+                            _ => "HANDS-FREE. JAI answers relevant speech without the wake word; background talk, humming and fragments are ignored.",
+                        };
+                        Ok(format!("Listening mode: {now} [was: {was}]"))
                     }
-                    None => Err("set_listening_mode needs mode: hands_free or wake_word.".into()),
+                    None => Err("set_listening_mode needs mode: wake_word, when_spoken_to or hands_free.".into()),
                 }
             }
             "window_management" => match str_arg(&args, &["action"]).and_then(WindowAction::parse) {
@@ -1823,10 +1836,7 @@ impl ToolContext {
                 }
             }
             run if protocols::RUNS.contains(&run) => match self.protocols.get(name) {
-                None => Err(format!(
-                    "No protocol called '{name}'. Known protocols: {}.",
-                    self.protocols.list().iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
-                )),
+                None => Err(self.no_protocol(name)),
                 Some(p) => {
                     // Steps in his own words follow the rest, one after the other, as if he had
                     // said them.
@@ -1916,7 +1926,30 @@ impl ToolContext {
                 })
                 .collect::<Vec<_>>()
                 .join("\n")),
-            "create" | "save" | "add" | "update" => {
+            "describe" | "explain" | "steps" => self.protocols.get(name).map(|p| protocols::described(&p)).ok_or_else(|| self.no_protocol(name)),
+            // "Edit the gaming protocol": its window, with it on the form (a new one by that name
+            // when there is none yet: "create a protocol called movie night").
+            "edit" | "open" | "open_editor" => {
+                crate::gui::show_protocols(Some(name));
+                Ok(match self.protocols.get(name) {
+                    Some(p) => format!("Here is the {}, Sir: change what you like.", protocols::display_name(&p.name)),
+                    None => format!("A new protocol called {name}, Sir. Tell me its steps, or add them in the window."),
+                })
+            }
+            "add_step" | "add_steps" | "remove_step" | "rename" | "update" | "change" => match self.protocols.get(name) {
+                None => Err(self.no_protocol(name)),
+                Some(was) => protocols::edit(&was, &action, args).and_then(|(p, line)| {
+                    if self.protocols.get(&p.name).is_some_and(|other| other.name != was.name) {
+                        return Err(format!("There is a {} already, Sir.", protocols::display_name(&p.name)));
+                    }
+                    let saved = self.protocols.save(p)?;
+                    if saved.name != was.name {
+                        self.protocols.delete(&was.name);
+                    }
+                    Ok(line)
+                }),
+            },
+            "create" | "save" | "add" => {
                 let list = |key: &str| -> Vec<String> {
                     args.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
                 };
@@ -1934,12 +1967,17 @@ impl ToolContext {
                 if self.protocols.delete(name) {
                     Ok(format!("Deleted the {name} protocol."))
                 } else {
-                    Err(format!("No protocol called '{name}'."))
+                    Err(self.no_protocol(name))
                 }
             }
-            other => Err(format!("Unknown protocols action '{other}' (run, list, create, delete).")),
+            other => Err(format!("Unknown protocols action '{other}' (run, list, describe, edit, create, add_step, remove_step, rename, update, delete).")),
         };
         (result, effects)
+    }
+
+    /// "No protocol called 'x'. Known protocols: …"
+    fn no_protocol(&self, name: &str) -> String {
+        format!("No protocol called '{name}'. Known protocols: {}.", self.protocols.list().iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "))
     }
 
     async fn media(&self, args: &Value) -> Result<String, String> {
@@ -2167,9 +2205,9 @@ fn pc_tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "set_listening_mode",
-            "description": "How YOU listen: hands_free (answer relevant speech without the wake word; \"switch to hands-free mode\", \"Freisprechmodus aktivieren\") or wake_word (only when Sir says JAI; \"only listen when I say JAI\").",
+            "description": "How YOU listen: wake_word (only a sentence with your name; \"only answer when I say your name\"), when_spoken_to (when you are addressed; \"listen if you are talked to\") or hands_free (\"switch to hands-free mode\").",
             "parameters": {"type": "object", "properties": {
-                "mode": {"type": "string", "enum": ["hands_free", "wake_word"]}
+                "mode": {"type": "string", "enum": ["wake_word", "when_spoken_to", "hands_free"]}
             }, "required": ["mode"]}
         }}),
         json!({"type": "function", "function": {

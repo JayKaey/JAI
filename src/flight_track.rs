@@ -22,6 +22,8 @@ pub struct Plane {
     pub speed_kt: f64,
     /// Degrees from north.
     pub track: f64,
+    /// Seconds since a receiver last heard its position (the feed's `seen_pos`).
+    pub age: f64,
 }
 
 /// Where a callsign flies: its airports' codes ("FRA-JFK") and their (place, lat, lon).
@@ -63,6 +65,7 @@ pub fn parse_planes(v: &Value) -> Vec<Plane> {
                 alt_ft: a["alt_baro"].as_f64(),
                 speed_kt: a["gs"].as_f64().unwrap_or(0.0),
                 track: a["track"].as_f64().unwrap_or(0.0),
+                age: a["seen_pos"].as_f64().unwrap_or(0.0),
             })
         })
         .collect()
@@ -117,17 +120,42 @@ pub fn icao_callsign(said: &str) -> String {
     }
 }
 
-/// The aircraft in the air now that flies from `from` to `to`, with its route.
+/// "DLH400" as it is said: "DLH 400".
+pub fn spoken(callsign: &str) -> String {
+    let (airline, number) = callsign.split_at(callsign.find(|c: char| c.is_ascii_digit()).unwrap_or(callsign.len()));
+    format!("{airline} {number}").trim().to_string()
+}
+
+/// Why the feed could not be asked, as it is said (the error itself goes to the log).
+fn feed_down(e: impl std::fmt::Display) -> String {
+    tracing::warn!("[FLIGHT] adsb.lol: {e}");
+    "the live flight feed isn't answering".into()
+}
+
+/// The aircraft in the air now that flies from `from` to `to`, with its route; else why not,
+/// as it is said ("none of the 40 aircraft along that route is heading that way").
 pub async fn find(from: (f64, f64), to: (f64, f64)) -> Result<(Plane, Route), String> {
     let spots: Vec<String> = [0.03, 0.15, 0.3, 0.5, 0.7, 0.85, 0.97].iter().map(|t| crate::earth::great_circle(from, to, *t)).map(|(lat, lon)| point_url(lat, lon, 250)).collect();
     let feeds = futures_util::future::join_all(spots.iter().map(|url| crate::earth::get_json(url, TIMEOUT))).await;
     if let Some(Err(e)) = feeds.first().filter(|_| feeds.iter().all(Result::is_err)) {
-        return Err(format!("adsb.lol: {e}"));
+        return Err(feed_down(e));
     }
     let planes: Vec<Plane> = feeds.iter().flatten().flat_map(parse_planes).collect();
+    let near = planes.iter().map(|p| &p.hex).collect::<HashSet<_>>().len();
+    if near == 0 {
+        return Err("no receiver hears a single aircraft along that route; far out over an ocean they're beyond their reach".into());
+    }
     let candidates: Vec<Plane> = heading_for(&planes, to).into_iter().take(30).collect();
+    if candidates.is_empty() {
+        return Err(format!("none of the {near} aircraft along that route is heading that way"));
+    }
     let urls: Vec<String> = candidates.iter().map(|p| route_url(&p.callsign)).collect();
     let routes = futures_util::future::join_all(urls.iter().map(|url| crate::earth::get_json(url, TIMEOUT))).await;
+    if let Some(Err(e)) = routes.first().filter(|_| routes.iter().all(Result::is_err)) {
+        tracing::warn!("[FLIGHT] routes: {e}");
+        return Err(format!("{} aircraft are heading that way, but the route database isn't answering, so I can't tell where they fly", candidates.len()));
+    }
+    let heading = candidates.len();
     candidates
         .into_iter()
         .zip(routes)
@@ -135,15 +163,35 @@ pub async fn find(from: (f64, f64), to: (f64, f64)) -> Result<(Plane, Route), St
             let route = parse_route(route.as_ref().ok()?)?;
             flies(&route, from, to).then_some((plane, route))
         })
-        .ok_or_else(|| format!("none of the {} aircraft heading that way flies that route", planes.len()))
+        .ok_or_else(|| format!("{heading} aircraft are heading that way, but none of them flies that route right now"))
 }
 
-/// The aircraft flying as `callsign` now, with its route when it is known.
+/// The aircraft flying as `callsign` now, with its route when it is known; else why not.
 pub async fn by_callsign(callsign: &str) -> Result<(Plane, Option<Route>), String> {
-    let v = crate::earth::get_json(&callsign_url(callsign), TIMEOUT).await.map_err(|e| format!("adsb.lol: {e}"))?;
-    let plane = parse_planes(&v).into_iter().next().ok_or_else(|| format!("{callsign} is not in the air within the receivers' reach"))?;
+    let v = crate::earth::get_json(&callsign_url(callsign), TIMEOUT).await.map_err(feed_down)?;
+    let plane = parse_planes(&v).into_iter().next().ok_or_else(|| format!("{} isn't in the air within the receivers' reach: not up yet, already down, or far out over an ocean", spoken(callsign)))?;
     let route = crate::earth::get_json(&route_url(callsign), TIMEOUT).await.ok().as_ref().and_then(parse_route);
     Ok((plane, route))
+}
+
+/// How long a plane is flown on from its last fix while no new one comes (dead reckoning, as
+/// a radar screen coasts a track); then it waits where it got to.
+pub const COAST_SECS: f64 = 30.0;
+
+/// Where `plane` is `secs` after its fix: flown on along its track at its ground speed.
+pub fn ahead(plane: &Plane, secs: f64) -> (f64, f64) {
+    let km = plane.speed_kt * 1.852 * secs.clamp(0.0, COAST_SECS) / 3600.0;
+    crate::earth::destination((plane.lat, plane.lon), plane.track, km)
+}
+
+/// What JAI says when the followed plane's signal is gone for a minute: why, by how high it was.
+pub fn lost_line(plane: &Plane) -> String {
+    let why = match plane.alt_ft {
+        Some(ft) if ft < 5_000.0 => "it was low, coming in to land, where the receivers lose it behind the ground",
+        None => "it was on the ground, where few receivers hear it",
+        Some(_) => "no receiver has heard it for a minute; far out over an ocean it's beyond their reach",
+    };
+    format!("I've lost {}, Sir: {why}.", spoken(&plane.callsign))
 }
 
 static FOLLOWING: Mutex<Option<String>> = Mutex::new(None);
@@ -158,15 +206,20 @@ pub fn stop() -> bool {
     FOLLOWING.lock().unwrap_or_else(|e| e.into_inner()).take().is_some()
 }
 
-/// Follows `plane` on the Earth every eight seconds until another flight, a place or "stop
-/// tracking" takes over, the Earth closes, or a minute passes without its signal.
+/// Seconds between two fixes of the followed plane; between them the Earth flies it on (`ahead`).
+const FIX_SECS: u64 = 2;
+
+/// Follows `plane` on the Earth, a fix every two seconds, until another flight, a place or
+/// "stop tracking" takes over, the Earth closes, or a minute passes without its signal (then
+/// he says why). A landing is said too.
 pub fn follow(plane: &Plane, label: String) {
     let hex = plane.hex.clone();
     *FOLLOWING.lock().unwrap_or_else(|e| e.into_inner()) = Some(hex.clone());
+    let mut last = plane.clone();
     tokio::spawn(async move {
         let mut misses = 0;
         loop {
-            tokio::time::sleep(Duration::from_secs(8)).await;
+            tokio::time::sleep(Duration::from_secs(FIX_SECS)).await;
             if following().as_deref() != Some(hex.as_str()) || !crate::earth::is_open() {
                 break;
             }
@@ -174,10 +227,16 @@ pub fn follow(plane: &Plane, label: String) {
             match seen {
                 Some(plane) => {
                     misses = 0;
-                    crate::earth::show_plane(&plane, &label, true);
+                    if last.alt_ft.is_some() && plane.alt_ft.is_none() {
+                        crate::announcements::say(format!("{} has landed, Sir.", spoken(&plane.callsign)));
+                    }
+                    crate::earth::show_plane(&plane, &label, true, None);
+                    last = plane;
                 }
-                None if misses >= 7 => {
-                    stop();
+                None if misses * FIX_SECS >= 60 => {
+                    if stop() {
+                        crate::announcements::say(lost_line(&last));
+                    }
                     break;
                 }
                 None => misses += 1,
@@ -235,5 +294,24 @@ mod tests {
         assert_eq!(track(json!({"action": "stop_tracking"})), Ok(Action::StopTrack));
         assert!(crate::earth::describes_a_place("the capital of France") && crate::earth::describes_a_place("Hauptstadt Spaniens"));
         assert!(!crate::earth::describes_a_place("Paris") && !crate::earth::describes_a_place("the capital letter key"));
+    }
+
+    /// Sir, 2026-11-26: "he should follow the flights every move and not just update every now
+    /// and then", and say why when he loses one: between two fixes the plane is flown on along
+    /// its track at its speed, for so long.
+    #[test]
+    fn a_followed_plane_is_flown_on_between_fixes() {
+        let p = parse_planes(&json!({"ac": [{"hex": "3c6444", "flight": "DLH400  ", "lat": 50.0, "lon": 8.0, "alt_baro": 37000, "gs": 480.0, "track": 90.0, "seen_pos": 1.5}]})).remove(0);
+        assert_eq!(p.age, 1.5);
+        let (lat, lon) = ahead(&p, 10.0);
+        let km = crate::earth::haversine_km((p.lat, p.lon), (lat, lon));
+        assert!((km - 480.0 * 1.852 * 10.0 / 3600.0).abs() < 0.01, "{km} km in ten seconds");
+        assert!(lon > p.lon && (lat - p.lat).abs() < 0.01, "east: ({lat}, {lon})");
+        let still = ahead(&p, 0.0);
+        assert!((still.0 - p.lat).abs() < 1e-9 && (still.1 - p.lon).abs() < 1e-9);
+        assert_eq!(ahead(&p, 600.0), ahead(&p, COAST_SECS), "it coasts half a minute, then waits");
+        assert_eq!(spoken("DLH400"), "DLH 400");
+        assert_eq!(lost_line(&p), "I've lost DLH 400, Sir: no receiver has heard it for a minute; far out over an ocean it's beyond their reach.");
+        assert!(lost_line(&Plane { alt_ft: Some(2_000.0), ..p.clone() }).contains("coming in to land"));
     }
 }

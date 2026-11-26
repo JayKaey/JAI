@@ -85,6 +85,18 @@ pub fn identity_name(text: &str) -> Option<String> {
     (!words.is_empty() && rest.split_whitespace().count() <= 4).then(|| words.join(" "))
 }
 
+/// The fact a new memory starts with: how Sir is addressed.
+const SEED_TITLE: &str = "Always address the user respectfully as 'Sir'.";
+
+/// The form of address an address fact names: the value itself when short ("Max"), else what
+/// follows its last " as " ("Sir should be addressed as Earth." → "Earth").
+pub fn address_in(value: &str) -> Option<String> {
+    let v = value.trim().trim_end_matches(['.', '!']);
+    let name = if v.split_whitespace().count() <= 4 { v } else { v.rsplit_once(" as ")?.1 };
+    let name = name.trim().trim_matches(['\'', '"']).trim();
+    (!name.is_empty() && name.split_whitespace().count() <= 4).then(|| name.to_string())
+}
+
 #[derive(Debug, Clone)]
 pub enum DeleteOutcome {
     Deleted(Vec<MemoryEntry>),
@@ -201,18 +213,26 @@ impl MemoryManager {
         if self.count().unwrap_or(1) > 0 {
             return;
         }
-        let _ = self.remember_fact(
-            "user_title",
-            "Always address the user respectfully as 'Sir'.",
-            Some("persona"),
-            Some(10),
-        );
+        let _ = self.remember_fact("user_title", SEED_TITLE, Some("persona"), Some(10));
         let _ = self.remember_fact(
             "language_preference",
             "Sir speaks German, English or a mix of both; JAI always replies in British English.",
             Some("preference"),
             Some(10),
         );
+    }
+
+    /// A form of address the memory holds that the settings never took (`address`: theirs, None
+    /// for "Sir") is not in force: one stored from a misheard "Call me Earth." before the identity
+    /// gate had the model call Sir "Earth" for two weeks. The seed comes back; true when it did.
+    pub fn heal_address(&self, address: Option<&str>) -> bool {
+        let held: Option<String> = self.lock().query_row("SELECT value FROM memories WHERE key = 'user_title'", [], |r| r.get(0)).ok();
+        let Some(named) = held.as_deref().and_then(address_in) else { return false };
+        // ("Sir" is safe whatever the settings say: every line's "Sir" becomes their address.)
+        if named.eq_ignore_ascii_case("sir") || address.is_some_and(|a| named.eq_ignore_ascii_case(a.trim())) {
+            return false;
+        }
+        self.remember_fact("user_title", SEED_TITLE, Some("persona"), Some(10)).is_ok()
     }
 
     pub fn count(&self) -> Result<i64, MemoryError> {
@@ -617,6 +637,26 @@ mod tests {
         for key in ["favorite_editor", "coffee", "title_of_book", "address", "home_address"] {
             assert!(!is_identity_key(key), "{key}");
         }
+    }
+
+    /// Repro (his memory, 2026-11-26): `user_title` held "Sir should be addressed as Earth." from
+    /// a misheard line of 2026-11-12 while the settings kept "Sir", so the model wrote "Earth".
+    #[test]
+    fn a_title_the_settings_never_took_goes_back_to_the_seed() {
+        let (mem, path) = temp_db();
+        assert_eq!(address_in("Sir should be addressed as Earth."), Some("Earth".into()));
+        assert_eq!(address_in(SEED_TITLE), Some("Sir".into()));
+        assert_eq!(address_in("Doctor Strange"), Some("Doctor Strange".into()));
+        assert_eq!(address_in("Sir likes to be greeted warmly in the morning."), None);
+        assert!(!mem.heal_address(None), "the seed is in force");
+        mem.remember_fact("user_title", "Sir should be addressed as Earth.", Some("personal"), Some(5)).unwrap();
+        assert!(mem.heal_address(None));
+        assert_eq!(mem.list(10).unwrap().iter().find(|m| m.key == "user_title").map(|m| m.value.as_str()), Some(SEED_TITLE));
+        assert!(!mem.heal_address(None), "once");
+        mem.remember_fact("user_title", "Sir should be addressed as Max.", None, None).unwrap();
+        assert!(!mem.heal_address(Some("Max")), "the settings took it");
+        drop(mem);
+        let _ = std::fs::remove_file(path);
     }
 
     /// The overwrite keeps what was there and its kind, so "that's not what I said" restores the

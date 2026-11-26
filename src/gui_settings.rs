@@ -4,7 +4,8 @@
 //! Theme Studio, the Feature Lab and the Integrations hub is found here; the deeper tools open
 //! from their row. "Open settings", VIEW → ALL SETTINGS.
 
-use super::{strip_font, strip_ink, strip_muted, ts};
+use super::{lock, strip_font, strip_ink, strip_muted, ts};
+use std::sync::Mutex;
 use crate::holo::{self, Face};
 use crate::interface::InterfaceSettings;
 use eframe::egui::{self, pos2, vec2, Align, Align2, Color32, FontId, Layout, Rect, RichText, Rounding, Sense, Ui};
@@ -97,7 +98,7 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 6] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "GAMES", "TOOLS"];
 
-static ROWS: [Row; 53] = [
+static ROWS: [Row; 59] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "THEME STUDIO")),
     row(
@@ -151,6 +152,8 @@ static ROWS: [Row; 53] = [
     row("SCREENS", "Video sound", "A background video plays its sound. Off: it is silent.", "audio mute ton stumm hintergrund", Control::Switch(|s| s.bg_sound, |s, v| s.bg_sound = v)),
     row("SCREENS", "Media dimming", "How much black lies over the media behind the board, so the board reads.", "background dark darker brightness dunkler hell hintergrund", Control::Size(|s| s.bg_dim, |s, v| s.bg_dim = v, 0.0, 0.9)),
     row("SCREENS", "Words beside the corner orb", "What is said stands beside the orb in its corner. Off: the orb alone.", "info information window plate text orb corner kugel", Control::Switch(|s| s.orb_words, |s, v| s.orb_words = v)),
+    row("SCREENS", "Corner orb", "The orb comes out to a corner while your windows cover the core.", "orb corner kugel ecke fly out", Control::Switch(|s| s.corner_orb, |s, v| s.corner_orb = v)),
+    row("SCREENS", "Corner orb only while he speaks", "Not for his name heard or a short order like play or stop: only while he talks.", "orb corner kugel ecke talking speaking spricht", Control::Switch(|s| s.corner_orb_speaking_only, |s, v| s.corner_orb_speaking_only = v)),
     row("SCREENS", "Corner orb size", "How large the orb is in its corner (the wheel over it does the same).", "orb size bigger smaller kugel größe", Control::Size(|s| s.corner_orb_scale, |s, v| s.corner_orb_scale = v, 0.6, 1.8)),
     row("SCREENS", "Desktop clock", "As the desktop's backdrop: the time under the emblem. Drag it anywhere.", "clock time uhr uhrzeit", Control::Switch(|s| s.desk_clock, |s, v| s.desk_clock = v)),
     row("SCREENS", "Clock: seconds", "The desktop clock shows its seconds.", "clock uhr sekunden", Control::Switch(|s| s.desk_clock_seconds, |s, v| s.desk_clock_seconds = v)),
@@ -160,6 +163,9 @@ static ROWS: [Row; 53] = [
     row("SCREENS", "Background", "Your pictures, videos or a slideshow behind the board, for every monitor or for each.", "background wallpaper picture video slideshow hintergrund bild diashow", Control::Open(Tool::Background, "BACKGROUND")),
     row("SCREENS", "Monitors", "Which monitor the board is on.", "screens display bildschirm monitor", Control::Open(Tool::Screens, "SCREENS")),
     row("VOICE", "Live words", "Your words appear under the emblem while you speak (paused while a game runs).", "captions transcript mitschrift worte", Control::Switch(|s| s.live_words, |s, v| s.live_words = v)),
+    row("VOICE", "Lyrics", "The words of the song that plays, line by line as it goes.", "song text sing along songtext liedtext musik", Control::Switch(|s| s.lyrics, |s, v| s.lyrics = v)),
+    row("VOICE", "Live subtitles", "What the PC plays (a video, a call) as subtitles at the bottom of the screen.", "captions untertitel stream call", Control::Switch(|s| s.subtitles, |s, v| s.subtitles = v)),
+    row("VOICE", "Subtitles in English", "The live subtitles translated into English.", "translate translation übersetzen englisch untertitel", Control::Switch(|s| s.subtitles_translate, |s, v| s.subtitles_translate = v)),
     row("VOICE", "Learn my voice", "One minute of reading aloud: he tunes his hearing to your voice and microphone.", "set-up setup calibrate wake name jay stimme lernen einrichten", Control::Open(Tool::VoiceSetup, "START")),
     row("VOICE", "Only obey me", "He answers to your voice alone, and learns it as you speak.", "lock speaker stranger everyone guest stimme sperre gast gäste", Control::Switch(|s| s.voice_lock, |s, v| s.voice_lock = v)),
     row("VOICE", "Short confirmations", "After an order he says it is done, without repeating what you just said.", "brief acknowledge talk less echo kurz bestätigung", Control::Switch(|s| s.brief_confirmations, |s, v| s.brief_confirmations = v)),
@@ -174,6 +180,7 @@ static ROWS: [Row; 53] = [
         "autostart startup boot login sign in automatically system hochfahren anmelden systemstart",
         Control::Moment(|_| crate::kit_pc::starts_with_system(), "start_with_system"),
     ),
+    row("PRESENCE", "Start muted", "He starts with the microphone off; your mute key or a click on the meter turns it on.", "mute microphone mic stumm mikrofon boot", Control::Switch(|s| s.start_muted, |s, v| s.start_muted = v)),
     row("PRESENCE", "Start-up sequence", "He powers up with a short sequence, a longer one after a long time away.", "boot greeting start begrüßung", Control::Switch(|s| s.startup_sequence, |s, v| s.startup_sequence = v)),
     row("PRESENCE", "Idle screen", "Unused for five minutes, the HUD dims to the clock, your next appointment and the weather.", "screensaver away dim clock ruhebildschirm uhr", Control::Switch(|s| s.idle_screen, |s, v| s.idle_screen = v)),
     row("PRESENCE", "Night mode by the clock", "From 22:00 to 6:00 he is dimmer, makes no sounds and speaks quietly and briefly.", "evening late dark nacht nachtmodus abend", Control::Switch(|s| s.night_mode, |s, v| s.night_mode = v)),
@@ -532,13 +539,29 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Out
         crate::hud_dock::forget(ID);
         return None;
     }
-    let mut out = None;
-    // (`block`: a window of its own.)
-    if super::block(ctx, ID, TITLE, [620.0, 680.0], |ui| out = body(ui, iface)) {
+    // (A window that draws apart from the board, `own_block`: it is drawn from the settings as
+    // the board last saw them, and what it asks waits for the board's next frame.)
+    static SEEN: Mutex<(Option<InterfaceSettings>, u64)> = Mutex::new((None, 0));
+    static ASKED: Mutex<Option<Out>> = Mutex::new(None);
+    let version = {
+        let mut seen = lock(&SEEN);
+        if seen.0.as_ref() != Some(iface) {
+            *seen = (Some(iface.clone()), seen.1 + 1);
+        }
+        seen.1
+    };
+    let drawn = |ui: &mut Ui| {
+        let Some(iface) = lock(&SEEN).0.clone() else { return };
+        if let Some(out) = body(ui, &iface) {
+            *lock(&ASKED) = Some(out);
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
+    };
+    if super::own_block(ctx, ID, TITLE, [620.0, 680.0], version, true, drawn) {
         open(false);
         crate::hud_dock::forget(ID);
     }
-    out
+    lock(&ASKED).take()
 }
 
 #[cfg(test)]

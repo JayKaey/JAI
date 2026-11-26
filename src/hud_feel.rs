@@ -163,6 +163,30 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         p(r"^(?:(?:make\s+)?(?:the\s+|your\s+)?corner\s+orb\s+(?:bigger|larger)|(?:a\s+)?(?:bigger|larger)\s+corner\s+orb)$", json!({"corner_orb_size": "bigger"})),
         p(r"^(?:(?:make\s+)?(?:the\s+|your\s+)?corner\s+orb\s+smaller|(?:a\s+)?smaller\s+corner\s+orb)$", json!({"corner_orb_size": "smaller"})),
         p(r"^(?:(?:the\s+|your\s+)?corner\s+orb\s+(?:size\s+)?(?:normal|back\s+to\s+normal)|reset\s+(?:the\s+|your\s+)?corner\s+orb(?:\s+size)?)$", json!({"corner_orb_size": "normal"})),
+        // The corner orb there or not, and only while he speaks (Sir, 2026-11-26: "make the
+        // corner orb only show when JAI is actually talking and not for the short commands").
+        p(
+            r"^(?:(?:make|let)\s+(?:the\s+|your\s+)?corner\s+orb\s+only\s+(?:show(?:\s+up)?|come\s+out|appear)|only\s+(?:show|bring\s+out)\s+(?:the\s+|your\s+)?corner\s+orb|(?:show\s+)?(?:the\s+|your\s+)?corner\s+orb\s+only)\s+(?:when|while|if)\s+(?:you(?:'?re|\s+are)?|jai\s+is|he(?:'?s|\s+is)?)\s+(?:actually\s+|really\s+)?(?:talking|speaking|talk|speak|talks|speaks)\b.*$|^zeig\s+(?:die\s+)?(?:eck\s*kugel|kugel\s+in\s+der\s+ecke)\s+nur,?\s+(?:wenn|während)\s+du\s+(?:sprichst|redest).*$",
+            json!({"corner_orb": true, "corner_orb_speaking_only": true}),
+        ),
+        p(
+            r"^(?:show\s+(?:the\s+|your\s+)?corner\s+orb\s+(?:for\s+everything|always|every\s+time|whenever\s+you\s+(?:work|do\s+something))(?:\s+again)?|(?:the\s+)?corner\s+orb\s+for\s+everything(?:\s+again)?)$",
+            json!({"corner_orb": true, "corner_orb_speaking_only": false}),
+        ),
+        p(
+            r"^(?:(?:(?:turn|switch)\s+off|disable|hide|remove|get\s+rid\s+of|no(?:\s+more)?|i\s+dont\s+(?:want|need))\s+(?:the\s+|your\s+|that\s+)?corner\s+orb(?:\s+(?:anymore|any\s+more))?|(?:the\s+)?corner\s+orb\s+(?:off|aus)|(?:keine|schalte?\s+die)\s+(?:eck\s*kugel|kugel\s+in\s+der\s+ecke)(?:\s+aus)?(?:\s+mehr)?)$",
+            json!({"corner_orb": false}),
+        ),
+        p(r"^(?:(?:(?:turn|switch)\s+on|enable|bring\s+back)\s+(?:the\s+|your\s+)?corner\s+orb(?:\s+again)?|(?:the\s+)?corner\s+orb\s+(?:back\s+)?(?:on|an))$", json!({"corner_orb": true})),
+        // Starting with the microphone off, or listening (Sir, 2026-11-26).
+        p(
+            r"^(?:(?:always\s+)?start\s+(?:up\s+)?(?:muted|with\s+(?:the\s+|your\s+)?(?:microphone|mic)\s+(?:off|muted))(?:\s+from\s+now\s+on)?|starte?\s+(?:immer\s+)?(?:stumm|mit\s+(?:dem\s+)?mikro(?:fon)?\s+aus))$",
+            json!({"start_muted": true}),
+        ),
+        p(
+            r"^(?:(?:dont|do\s+not|never)\s+start\s+(?:up\s+)?muted|start\s+(?:up\s+)?(?:unmuted|listening|with\s+(?:the\s+|your\s+)?(?:microphone|mic)\s+on)|starte?\s+(?:nicht\s+(?:mehr\s+)?stumm|mit\s+(?:dem\s+)?mikro(?:fon)?\s+an))$",
+            json!({"start_muted": false}),
+        ),
     ]
 });
 
@@ -342,7 +366,7 @@ pub const RUNTIME_KEYS: [(&str, &str); 14] = [
 /// (`brain::tests::the_whole_prompt_fits_the_context_window`), and these are said in words the
 /// fast path knows.
 #[cfg(test)]
-pub const UNLISTED: [&str; 21] = ["background_media", "background_monitor", "background_mode", "background_interval", "background_sound", "background_dim", "show_board", "background_all_monitors", "windows_on_call", "hotkeys_window", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size", "start_with_system", "now_playing", "protocol_window", "background_window"];
+pub const UNLISTED: [&str; 24] = ["start_muted", "corner_orb", "corner_orb_speaking_only", "background_media", "background_monitor", "background_mode", "background_interval", "background_sound", "background_dim", "show_board", "background_all_monitors", "windows_on_call", "hotkeys_window", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size", "start_with_system", "now_playing", "protocol_window", "background_window"];
 
 /// How long what comes next stands beside the emblem once Sir asked for it.
 const NEXT_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
@@ -458,6 +482,14 @@ pub fn lyrics() -> bool {
     LYRICS.load(Ordering::Acquire)
 }
 
+/// The lyrics and the subtitles as they are saved (`InterfaceSettings`), what every change of
+/// them keeps: so they come back at the next start (Sir, 2026-11-26).
+pub fn keep_saved(iface: &crate::interface::InterfaceSettings) {
+    LYRICS.store(iface.lyrics, Ordering::Release);
+    SUBTITLES.store(iface.subtitles, Ordering::Release);
+    SUBTITLES_TRANSLATE.store(iface.subtitles_translate, Ordering::Release);
+}
+
 pub fn set_lyrics(on: bool) {
     LYRICS.store(on, Ordering::Release);
 }
@@ -542,7 +574,7 @@ pub fn apply(args: &Value) {
         crate::gui::show_background_window();
     }
     if flag(args, "protocol_window") == Some(true) {
-        crate::gui::show_protocols();
+        crate::gui::show_protocols(None);
     }
     if flag(args, "hotkeys_window") == Some(true) {
         crate::gui::show_hotkeys();
@@ -579,6 +611,15 @@ pub fn spoken(args: &Value) -> Option<String> {
     }
     if on("show_board") == Some(true) {
         return Some("The board, Sir. It goes again when we are done.".into());
+    }
+    if let Some(v) = on("start_muted") {
+        return say("From now on I start with the microphone off, Sir. Your mute key turns it on.", "From now on I start listening, Sir.", v);
+    }
+    if let Some(only) = on("corner_orb_speaking_only").filter(|_| on("corner_orb") != Some(false)) {
+        return say("My orb comes to the corner only while I speak, Sir.", "My orb comes to the corner whenever I'm at work, Sir.", only);
+    }
+    if let Some(v) = on("corner_orb") {
+        return say("The corner orb is back, Sir.", "No corner orb, Sir. I stay behind your windows.", v);
     }
     if let Some(v) = on("calm_hud") {
         return say("Calm it is, Sir. The readouts step back until you reach for them.", "Everything on screen, Sir.", v);
@@ -877,6 +918,16 @@ mod tests {
             ("make the corner orb smaller", json!({"corner_orb_size": "smaller"})),
             ("bigger corner orb", json!({"corner_orb_size": "bigger"})),
             ("corner orb size normal", json!({"corner_orb_size": "normal"})),
+            // Sir, 2026-11-26: the corner orb there or not, only while he speaks; starting muted.
+            ("only show the corner orb when you're talking", json!({"corner_orb": true, "corner_orb_speaking_only": true})),
+            ("make the corner orb only show when jai is actually talking and not for the short commands like play", json!({"corner_orb": true, "corner_orb_speaking_only": true})),
+            ("show the corner orb for everything again", json!({"corner_orb": true, "corner_orb_speaking_only": false})),
+            ("turn off the corner orb", json!({"corner_orb": false})),
+            ("corner orb on", json!({"corner_orb": true})),
+            ("always start muted", json!({"start_muted": true})),
+            ("start with the microphone off", json!({"start_muted": true})),
+            ("starte immer stumm", json!({"start_muted": true})),
+            ("never start muted", json!({"start_muted": false})),
         ] {
             assert_eq!(says(text), Some(want), "{text}");
         }

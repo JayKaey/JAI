@@ -665,6 +665,32 @@ mod addressee_tests {
             assert!(!bare_media_order(said), "{said}");
         }
     }
+
+    /// Sir, 2026-11-26: over speakers "he hears himself and stops talking". The gauge learns
+    /// how loud his voice comes back; Sir must be louder than that to speak over him. With a
+    /// headset the microphone hears only the room, and Sir's voice gets through as before.
+    #[test]
+    fn his_echo_is_learned_and_only_a_louder_voice_speaks_over_him() {
+        // Speakers: the microphone hears his voice at a third of what he plays, half a second late.
+        let mut speakers = EchoGauge::default();
+        let played = |k: usize| if k % 8 < 6 { 0.2 } else { 0.0 };
+        let mut floor = 0.0;
+        for k in 0..200 {
+            let heard = if k >= 3 { played(k - 3) / 3.0 } else { 0.0 } + 0.002;
+            floor = speakers.frame(played(k), heard, true, false);
+            assert!(heard < floor.max(0.01) || k < 24, "frame {k}: his own echo {heard} over the floor {floor}");
+        }
+        assert!(speakers.coupling > SPEAKERS, "speakers: {}", speakers.coupling);
+        assert!(0.2 > floor, "Sir at 0.2 speaks over him: floor {floor}");
+        // A headset: the microphone hears the room only.
+        let mut headset = EchoGauge::default();
+        for k in 0..200 {
+            floor = headset.frame(played(k), 0.002, true, false);
+        }
+        assert!(headset.coupling < SPEAKERS && floor < 0.01, "headset: {} {floor}", headset.coupling);
+        // Not speaking: nothing is his echo.
+        assert_eq!(speakers.frame(0.2, 0.05, false, false), 0.0);
+    }
 }
 
 /// Monotonic milliseconds since process start.
@@ -709,15 +735,69 @@ pub struct AudioControls {
     /// Acoustic radar gestures: bit 0 = double clap, bit 1 = door knock.
     acoustic_flags: AtomicU8,
     acoustic_sensitivity: AtomicU32,
+    /// How much of his own voice the microphone hears back (`EchoGauge::coupling`, f32 bits).
+    echo_coupling: AtomicU32,
+}
+
+/// The coupling above which the microphone hears his voice back from speakers (a headset's
+/// stays near nothing).
+const SPEAKERS: f32 = 0.12;
+/// How much louder than his own echo Sir's voice must be to speak over him (about 7 dB).
+const ECHO_MARGIN: f32 = 2.2;
+
+/// What his own voice comes back as at the microphone, measured while he talks: his output's
+/// loudness over the last half second (the echo arrives late) against what the microphone hears.
+/// (Sir, 2026-11-26: "when I have JAI speaking over speakers he hears himself and stops talking".)
+pub struct EchoGauge {
+    played: std::collections::VecDeque<f32>,
+    ratios: std::collections::VecDeque<f32>,
+    /// Microphone loudness per unit of his output (the 80th percentile of the last ~4 s of his speech).
+    pub coupling: f32,
+}
+
+impl Default for EchoGauge {
+    fn default() -> Self {
+        // (Until it has heard him, speakers are assumed: his first words must not cut themselves off.)
+        Self { played: Default::default(), ratios: Default::default(), coupling: 0.3 }
+    }
+}
+
+impl EchoGauge {
+    /// One frame: how loud he plays (`played`, rms of his output) and how loud the microphone
+    /// hears (`heard`), while he speaks or not; the loudness below which the frame is his echo.
+    pub fn frame(&mut self, played: f32, heard: f32, speaking: bool, sir_speaking: bool) -> f32 {
+        self.played.push_back(played);
+        if self.played.len() > 16 {
+            self.played.pop_front();
+        }
+        let reference = self.played.iter().copied().fold(0.0f32, f32::max);
+        if !speaking {
+            return 0.0;
+        }
+        // (What the microphone hears while Sir is speaking says nothing of the echo.)
+        if !sir_speaking && reference > 0.01 {
+            self.ratios.push_back((heard / reference).min(4.0));
+            if self.ratios.len() > 128 {
+                self.ratios.pop_front();
+            }
+            if self.ratios.len() >= 24 {
+                let mut sorted: Vec<f32> = self.ratios.iter().copied().collect();
+                sorted.sort_by(f32::total_cmp);
+                self.coupling = sorted[sorted.len() * 4 / 5];
+            }
+        }
+        self.coupling * reference * ECHO_MARGIN
+    }
 }
 
 const CLAP: u8 = 1;
 const KNOCK: u8 = 2;
+const SNEEZE: u8 = 4;
 /// How long after JAI's audio ends the microphone still counts what it hears as his echo.
 const ECHO_TAIL_MS: u64 = 350;
 
 fn acoustic_bits(a: &AcousticSettings) -> u8 {
-    (if a.double_clap { CLAP } else { 0 }) | (if a.knock_alert { KNOCK } else { 0 })
+    (if a.double_clap { CLAP } else { 0 }) | (if a.knock_alert { KNOCK } else { 0 }) | (if a.bless_sneezes { SNEEZE } else { 0 })
 }
 
 impl AudioControls {
@@ -744,7 +824,14 @@ impl AudioControls {
             active_mic: Mutex::new("—".to_string()),
             acoustic_flags: AtomicU8::new(acoustic_bits(&cfg.acoustic)),
             acoustic_sensitivity: f32_atomic(cfg.acoustic.sensitivity),
+            echo_coupling: f32_atomic(EchoGauge::default().coupling),
         }
+    }
+
+    /// The microphone hears his voice back (speakers): words heard over him wait for their
+    /// transcript before they stop him, and his own come to nothing (`tts::echoes_him`).
+    pub fn hears_himself(&self) -> bool {
+        load_f32(&self.echo_coupling) >= SPEAKERS
     }
 
     /// Applies changed acoustic-radar settings live.
@@ -1142,6 +1229,7 @@ fn vad_thread(
     // The energy gate listens to the voice band (100 Hz – 3.5 kHz), not the whole room.
     let mut band = vad::VoiceBand::new();
     let mut radar = AcousticRadar::new(cfg.acoustic.sensitivity);
+    let mut echo = EchoGauge::default();
     // The last three seconds the radar heard: what the sound model names a sound by.
     let mut heard: std::collections::VecDeque<f32> = std::collections::VecDeque::with_capacity(48_000);
     let mut feeds: Vec<FeedState> = Vec::new();
@@ -1297,12 +1385,15 @@ fn vad_thread(
                 heard.extend(frame.iter().copied());
                 let over = heard.len().saturating_sub(48_000);
                 heard.drain(..over);
-                let listening = !assistant_speaking && !ptt && mic_test.is_none() && !machine.in_utterance();
+                // (Not listening, he hears no claps or knocks either: Sir, 2026-11-26.)
+                let listening = !assistant_speaking && !ptt && mic_test.is_none() && !machine.in_utterance() && !crate::listening_lock::is_locked();
                 if let Some(ev) = radar.process(frame, listening) {
                     let wanted = awaited
                         || match ev {
                             AcousticEvent::Claps { count: 2 } => flags & CLAP != 0,
                             AcousticEvent::Knock { .. } => flags & KNOCK != 0,
+                            // (A sneeze is a click or a short sound to the radar; the model tells.)
+                            AcousticEvent::Single | AcousticEvent::Sound => flags & SNEEZE != 0,
                             _ => false,
                         };
                     if wanted {
@@ -1316,10 +1407,13 @@ fn vad_thread(
                 radar.reset_patterns();
                 heard.clear();
             }
+            let echo_floor = echo.frame(crate::tts::output_level(), rms, assistant_speaking, machine.in_utterance());
+            controls.echo_coupling.store(echo.coupling.to_bits(), Ordering::Relaxed);
             let ctx = FrameContext {
                 assistant_speaking,
                 ptt,
                 suspended: mic_test.is_some(),
+                echo_floor,
             };
 
             if let Some(event) = machine.process(frame, prob, rms, ctx) {

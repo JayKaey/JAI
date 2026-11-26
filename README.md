@@ -355,6 +355,11 @@ nothing, and for two minutes he says that it lapsed and which words start it aga
 happens if I restart my PC?" is told what that does (what closes, what is lost), "how do I shut
 down my PC?" the words that do it, and none of these questions starts anything.
 
+The quick settings run straight away too: "turn off the Wi-Fi", "Bluetooth on", "airplane mode
+on" (every radio off), "switch to high performance mode" (or balanced, or power saving: Windows'
+power plans, of which many PCs have only Balanced) and "switch Windows to dark mode" (or light:
+its apps and taskbar). "Dark mode" alone is still his own look.
+
 ## Undo
 
 "Undo that" (or "change it back", "put it back", "mach das rückgängig") takes back the last thing
@@ -506,7 +511,11 @@ every start he writes `~/.local/share/applications/jai.desktop` for the program 
 him once more after the first start (or after moving him). Music and media keys go over MPRIS,
 power and sleep over logind, the lock to KDE's own lock screen, and his tray icon is a
 StatusNotifierItem. Other desktops get what works without KDE (`wmctrl` and `xdotool` on X11,
-`hyprctl` on Hyprland, `xprintidle` for the idle time).
+`hyprctl` on Hyprland, `xprintidle` for the idle time). The Wi-Fi, Bluetooth and airplane mode
+switch through `rfkill` (util-linux, which every Arch has), dark or light through
+`plasma-apply-colorscheme` (Breeze), and the power plans through `powerprofilesctl`:
+power-profiles-daemon, which Plasma's battery applet uses too. It is not in the list above, as it
+cannot stand beside TLP; without it he says so.
 
 Started on its own, `jai` is the installer, with the same LOG IN and REGISTER as on Windows: it
 fetches Ollama for Linux and the models, and installs into `~/.local/share/jai` with an entry in

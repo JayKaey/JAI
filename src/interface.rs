@@ -198,6 +198,19 @@ pub struct InterfaceSettings {
     /// As the background: the song that plays stands beside the core. (Sir, 2026-11-21: "I also
     /// want to be able to disable to now playing widget that shows next to JAIs orb".)
     pub now_playing: bool,
+    /// He starts with the microphone off; Ctrl+M or a click on the meter turns it on. (Sir,
+    /// 2026-11-26: "I should have the option to toggle if JAI starts muted or not".)
+    pub start_muted: bool,
+    /// The lyrics and the live subtitles (translated or not) as Sir last left them, again at
+    /// the next start (Sir, 2026-11-26); `hud_feel` holds them while he runs.
+    pub lyrics: bool,
+    pub subtitles: bool,
+    pub subtitles_translate: bool,
+    /// As the background: the orb comes out to the corner while windows cover the emblem; off,
+    /// it never does. `corner_orb_speaking_only`: only while he speaks (or waits for the answer
+    /// to his question), not for a short order's badge or his name heard (Sir, 2026-11-26).
+    pub corner_orb: bool,
+    pub corner_orb_speaking_only: bool,
     /// Media on the board's black (`bg_media`): "behind" (the board over it, dimmed) or "whole"
     /// (the media alone, the board when called); the source per monitor number ("all": every
     /// monitor without its own), a picture, an H.264 MP4 or a folder of pictures; the seconds a
@@ -266,6 +279,12 @@ impl Default for InterfaceSettings {
             desk_clock_12h: false,
             desk_clock_date: true,
             now_playing: true,
+            start_muted: false,
+            lyrics: false,
+            subtitles: false,
+            subtitles_translate: false,
+            corner_orb: true,
+            corner_orb_speaking_only: false,
             bg_mode: "behind".into(),
             bg_media: Default::default(),
             bg_interval: 30,
@@ -975,6 +994,9 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         ("twelve-hour clock", bool_arg(args, "desk_clock_12h"), &mut s.desk_clock_12h),
         ("clock date", bool_arg(args, "desk_clock_date"), &mut s.desk_clock_date),
         ("now playing beside the core", bool_arg(args, "now_playing"), &mut s.now_playing),
+        ("starting muted", bool_arg(args, "start_muted"), &mut s.start_muted),
+        ("corner orb", bool_arg(args, "corner_orb"), &mut s.corner_orb),
+        ("corner orb only while he speaks", bool_arg(args, "corner_orb_speaking_only"), &mut s.corner_orb_speaking_only),
         // (Before his voice is known it holds nothing back: the print is gathered from the
         // orders given by name, and the lock holds from then on.)
         ("voice lock", bool_arg(args, "voice_lock"), &mut s.voice_lock),
@@ -1012,6 +1034,13 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
     for (key, label) in crate::hud_feel::RUNTIME_KEYS {
         if let Some(on) = bool_arg(args, key) {
             done.push(format!("{label} {}", if on { "on" } else { "off" }));
+            // (The lyrics and the subtitles are kept for the next start: Sir, 2026-11-26.)
+            match key {
+                "lyrics" => s.lyrics = on,
+                "subtitles" => s.subtitles = on,
+                "subtitles_translate" => s.subtitles_translate = on,
+                _ => {}
+            }
         }
     }
     if let Some(open) = bool_arg(args, "text_console") {
@@ -1143,6 +1172,9 @@ pub fn core_command(args: &Value) -> Option<crate::holo_mind::CoreCommand> {
             _ => return None,
         });
     }
+    if let Some(kind) = args.get("core_kind").and_then(Value::as_str).and_then(crate::holo_mind::CoreKind::of_word) {
+        return Some(CoreCommand::Kind(kind));
+    }
     match args.get("core_spin").and_then(Value::as_str) {
         Some("faster") => Some(CoreCommand::Spin(2.0)),
         Some("slower") => Some(CoreCommand::Spin(0.5)),
@@ -1205,6 +1237,9 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
         return match cmd {
             crate::holo_mind::CoreCommand::Spin(f) if f <= 0.0 => "Holding it still, Sir.".into(),
             crate::holo_mind::CoreCommand::Spin(_) => "Spinning it up, Sir.".into(),
+            crate::holo_mind::CoreCommand::Kind(crate::holo_mind::CoreKind::Files) => "Every file of mine, Sir, joined where one uses another.".into(),
+            crate::holo_mind::CoreCommand::Kind(crate::holo_mind::CoreKind::Rings) => "My rings, Sir.".into(),
+            crate::holo_mind::CoreCommand::Kind(_) => "My mind, Sir: the real core.".into(),
             _ => "Scaled, Sir.".into(),
         };
     }
@@ -1858,6 +1893,13 @@ mod tests {
     #[test]
     fn the_corner_orb_and_the_desktop_clock_are_settings() {
         let now = InterfaceSettings::default();
+        // Sir, 2026-11-26: the lyrics and the subtitles kept for the next start, starting muted,
+        // the corner orb off or only while he speaks.
+        let set = |args: Value| configure(&now, &args).unwrap().settings;
+        assert!(set(json!({"lyrics": true})).lyrics && set(json!({"subtitles": true, "subtitles_translate": true})).subtitles_translate);
+        assert!(!set(json!({"lyrics": false})).lyrics && set(json!({"start_muted": true})).start_muted);
+        assert!(now.corner_orb && !now.corner_orb_speaking_only && !now.start_muted && !now.lyrics);
+        assert!(!set(json!({"corner_orb": false})).corner_orb && set(json!({"corner_orb_speaking_only": true})).corner_orb_speaking_only);
         assert!(now.orb_words && now.desk_clock && now.desk_clock_date && !now.desk_clock_seconds && !now.desk_clock_12h && now.desk_clock_pos.is_none());
         assert!(!configure(&now, &json!({"orb_words": false})).unwrap().settings.orb_words);
         // Any setting of the clock but its hiding shows it.

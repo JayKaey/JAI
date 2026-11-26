@@ -126,6 +126,8 @@ keyring = { version = "3", features = ["windows-native"] }
 windows = { version = "0.54", features = [
     # WinRT: the Windows location service ("where am I" on the Earth).
     "Devices_Geolocation",
+    # WinRT: Wi-Fi, Bluetooth and airplane mode switched ("turn off the Wi-Fi").
+    "Devices_Radios",
     # WinRT: the system media session (what is playing, play/pause/skip per app).
     "Foundation",
     "Foundation_Collections",

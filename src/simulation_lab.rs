@@ -1429,10 +1429,6 @@ fn configure(sim: &mut Simulation, spec: &str) -> Result<(), String> {
         SimKind::Function | SimKind::GradientDescent => {
             sim.show_derivative = lower.contains("derivative") || lower.contains("ableitung") || lower.contains("f'");
             sim.show_integral = lower.contains("integral") || lower.contains("area") || lower.contains("fläche");
-            // "x from -5 to 5", "range -5..5", "[-5, 5]".
-            static RANGE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-                regex::Regex::new(r"(?:from|range|between|x\s*∈|von)\s*\[?\s*(-?\d+(?:\.\d+)?)\s*(?:to|\.\.|,|and|bis)\s*(-?\d+(?:\.\d+)?)").expect("valid range regex")
-            });
             if let Some(c) = RANGE.captures(&lower) {
                 if let (Ok(a), Ok(b)) = (c[1].parse::<f64>(), c[2].parse::<f64>()) {
                     if b > a {
@@ -1714,11 +1710,73 @@ pub fn run_tool(lab: &SimulationLab, name: &str, args: &Value) -> Result<String,
 /// words or, failing that, from the conversation so far (`context`, oldest first). A ball
 /// "thrown 5 m up" becomes a vertical launch reaching 5 m (v = √(2gh)); "from 5 m" is the launch
 /// height. None when the sentence is not a request to see a simulation.
+/// A plot's span of x: "x from -5 to 5", "range -5..5", "[-5, 5]".
+static RANGE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"(?:from|range|between|x\s*∈|von)\s*\[?\s*(-?\d+(?:\.\d+)?)\s*(?:to|\.\.|,|and|bis)\s*(-?\d+(?:\.\d+)?)").expect("valid range regex"));
+
+/// The curves in an order that writes no "f(x) =" ("plot me x^3", "plot sine of x and x cubed",
+/// "zeichne x hoch 3", "graph one over x"): spoken math made symbols, the order's own words left
+/// out. None when no formula of x is left (Sir, 2026-11-26: "plot me x^3" drew a·x² + b·x + c).
+fn spoken_formula(text: &str) -> Option<String> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static SPOKEN: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
+        [
+            (r"\b(?:to\s+the\s+power\s+of|to\s+the|hoch)\s+(\d+(?:\.\d+)?)(?:st|nd|rd|th)?(?:\s+power)?\b", "^$1"),
+            (r"\b(?:squared|im\s+quadrat)\b", "^2"),
+            (r"\bcubed\b", "^3"),
+            (r"\b(?:sine|sinus)\b", "sin"),
+            (r"\b(?:cosine|cosinus|kosinus)\b", "cos"),
+            (r"\b(?:tangent|tangens)\b", "tan"),
+            (r"\b(?:natural\s+log(?:arithm)?|natürlicher\s+logarithmus)\b", "ln"),
+            (r"\b(?:logarithm|logarithmus)\b", "log"),
+            (r"\b(?:absolute\s+value|betrag)\b", "abs"),
+            (r"\b(?:square\s+root|root|wurzel)(?:\s+(?:of|aus|von))?\b", "sqrt"),
+            (r"\be\s+to\s+the\b", "e^"),
+            (r"\b(sin|cos|tan|sqrt|ln|log|exp|abs)\s+(?:of\s+|von\s+)?(\d*\.?\d*\s*x)\b", "$1($2)"),
+            (r"\bplus\b", "+"),
+            (r"\bminus\b", "-"),
+            (r"\b(?:times|multiplied\s+by|mal)\b", "*"),
+            (r"\b(?:divided\s+by|over|geteilt\s+durch|durch)\b", "/"),
+            (r"\bone\b", "1"),
+            (r"\btwo\b|\bzwei\b", "2"),
+            (r"\bthree\b|\bdrei\b", "3"),
+            (r"\bfour\b|\bvier\b", "4"),
+            (r"\bfive\b|\bfünf\b", "5"),
+        ]
+        .into_iter()
+        .map(|(re, to)| (Regex::new(re).expect("spoken math"), to))
+        .collect()
+    });
+    static PIECE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+(?:\.\d+)?|[a-zäöüß]+|[\^*/+\-()]").expect("formula piece"));
+    static APART: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+(?:and|und)\s+|[,;]").expect("formula parts"));
+    let curves: Vec<String> = APART
+        .split(&RANGE.replace_all(&text.to_lowercase(), " "))
+        .filter_map(|part| {
+            let said = SPOKEN.iter().fold(part.to_string(), |acc, (re, to)| re.replace_all(&acc, *to).into_owned());
+            // What is left of the order: x, figures, operators and the functions the plotter knows.
+            let mut f = String::new();
+            for piece in PIECE.find_iter(&said).map(|m| m.as_str()) {
+                let word = piece.starts_with(|c: char| c.is_alphabetic());
+                if word && !(piece == "x" || piece == "e" || piece == "pi" || FUNCTIONS.contains(&piece)) {
+                    continue;
+                }
+                if f.ends_with(|c: char| c.is_alphabetic()) && piece.starts_with(|c: char| c.is_alphanumeric()) {
+                    f.push(' ');
+                }
+                f.push_str(if matches!(piece, "+" | "-") && !f.is_empty() { if piece == "+" { " + " } else { " - " } } else { piece });
+            }
+            (f.contains('x') && f != "x" && parse_expr(&f).is_ok()).then_some(f)
+        })
+        .collect();
+    (!curves.is_empty()).then(|| curves.join("; "))
+}
+
 pub fn simulation_request(text: &str, context: &[String]) -> Option<Value> {
     use regex::Regex;
     use std::sync::LazyLock;
     static ASKS: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)\b(?:simulat\w*|simulier\w*|visuali[sz]\w*|animat\w*|plot\w*|zeichne|darstell\w*)\b|\b(?:show|zeig|zeige|display|open|launch|start|starte|run)\b.*\b(?:simulation|simulator|trajectory|flugbahn|graph|plot|animation|pendulum|pendel|surface|orbits?|solar system|double slit|doppler|ripples?|standing wave|spring|balls|(?:bubble|quick|insertion|selection)\s*sort|sorting(?:\s+algorithm)?|sortieralgorithmus)\b|\bz\s*=\s*\S").expect("valid simulation request regex")
+        Regex::new(r"(?i)\b(?:simulat\w*|simulier\w*|visuali[sz]\w*|animat\w*|plot\w*|zeichne|darstell\w*)\b|^(?:please\s+)?graph\b|\b(?:show|zeig|zeige|display|open|launch|start|starte|run)\b.*\b(?:simulation|simulator|trajectory|flugbahn|graph|plot|animation|pendulum|pendel|surface|orbits?|solar system|double slit|doppler|ripples?|standing wave|spring|balls|(?:bubble|quick|insertion|selection)\s*sort|sorting(?:\s+algorithm)?|sortieralgorithmus)\b|\bz\s*=\s*\S").expect("valid simulation request regex")
     });
     // A sentence that points back at the conversation ("simulate that", "show me the simulation",
     // "plot it at 45 degrees"); "visualise the volcano" names a thing of its own.
@@ -1749,6 +1807,8 @@ pub fn simulation_request(text: &str, context: &[String]) -> Option<Value> {
     let (kind, kind_text) = match kind_of(text) {
         Some(SimKind::Function) if verb_only && BACK.is_match(&lower) => earlier().unwrap_or((SimKind::Function, text)),
         Some(k) => (k, text),
+        // ("Zeichne mir x hoch 3": a curve of x names the plotter.)
+        None if spoken_formula(&lower).is_some() => (SimKind::Function, text),
         None if BACK.is_match(&lower) => earlier()?,
         None => return None,
     };
@@ -1830,9 +1890,14 @@ pub fn simulation_request(text: &str, context: &[String]) -> Option<Value> {
         }
         SimKind::Function => {
             static FORMULA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:f\(x\)|y)\s*=\s*([^,;?!\n]+)").expect("formula regex"));
-            if let Some(f) = sources.iter().find_map(|s| FORMULA.captures(s).map(|c| c[1].trim().trim_end_matches('.').to_string())) {
+            // (Sir's own sentence first, written or spoken; then the conversation's.)
+            let written = |s: &String| FORMULA.captures(s).map(|c| c[1].trim().trim_end_matches('.').to_string());
+            if let Some(f) = written(&lower).or_else(|| spoken_formula(&lower)).or_else(|| sources[1..].iter().find_map(written)) {
                 title = format!("f(x) = {f}");
                 spec.push(f);
+                if let Some(span) = RANGE.find(&lower) {
+                    spec.push(span.as_str().to_string());
+                }
             }
         }
         // The scene, the formula, the colour: `configure` reads them from the words themselves.
@@ -2143,6 +2208,40 @@ mod tests {
         let now = lab.get(&sim.id).unwrap();
         assert!(now.points.iter().any(|(n, x, y)| n == "C" && *x == 1.0 && *y == -2.0));
         assert_eq!(now.functions.iter().map(|(l, s, _)| format!("{l}: {s}")).collect::<Vec<_>>(), ["f: x^2 - 4", "h: sin(x)", "g: x^3"]);
+    }
+
+    #[test]
+    fn spoken_formulas_are_plotted_as_said() {
+        // Sir, 2026-11-26: "When i say plot me x^3 he shows me x^2, same for sin(x)".
+        let lab = SimulationLab::default();
+        for (said, curve) in [
+            ("Plot me x^3", "x^3"),
+            ("plot me sin(x)", "sin(x)"),
+            ("Plot me x cubed.", "x^3"),
+            ("plot sine of x", "sin(x)"),
+            ("Zeichne mir x hoch 3", "x^3"),
+            ("graph one over x", "1/x"),
+            ("plot the square root of x", "sqrt(x)"),
+            ("plot x cubed minus 2x", "x^3 - 2x"),
+            ("plot minus x squared", "-x^2"),
+            ("plot e to the x", "e^x"),
+            ("plot sin(2x) from -5 to 5", "sin(2x)"),
+        ] {
+            let args = simulation_request(said, &[]).unwrap_or_else(|| panic!("{said}: no plot"));
+            assert_eq!(args["sim_type"], "function", "{said}");
+            let spec = args["formula_or_params"].as_str().unwrap();
+            assert_eq!(spec.split(", ").next(), Some(curve), "{said}");
+            let sim = lab.launch(SimKind::Function, spec, None).unwrap();
+            assert_eq!(sim.functions.iter().map(|(_, src, _)| src.as_str()).collect::<Vec<_>>(), vec![curve], "{said}: what is drawn");
+            lab.close(&sim.id); // (the lab holds six)
+        }
+        let both = simulation_request("plot sine of x and x cubed", &[]).unwrap();
+        assert_eq!(both["formula_or_params"], "sin(x); x^3");
+        let ranged = lab.launch(SimKind::Function, simulation_request("plot sin(2x) from -5 to 5", &[]).unwrap()["formula_or_params"].as_str().unwrap(), None).unwrap();
+        assert_eq!(ranged.x_range, (-5.0, 5.0));
+        for said in ["plot my heart rate", "plot the next steps"] {
+            assert_eq!(spoken_formula(said), None, "{said}");
+        }
     }
 
     #[test]

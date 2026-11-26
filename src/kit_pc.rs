@@ -55,6 +55,22 @@ static UPGRADE_ORDER: LazyLock<Regex> = LazyLock::new(|| re(r"^upgrade all apps 
 static MIC: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:my |the )?(?:mic|microphone) (?:doesn'?t|doesn t|does not|isn'?t|isn t|is not|won'?t|won t) (?:work|working|work anymore)$|^(?:check|test) (?:my |the )?(?:mic|microphone)$|^(?:what(?:'s|s| s| is) wrong with|is something wrong with) (?:my |the )?(?:mic|microphone)$|^(?:mein |das )?(?:mikro|mikrofon|mic) (?:geht|funktioniert) nicht(?: mehr)?$|^(?:prüf|prüfe|teste?) (?:mein |das )?(?:mikro|mikrofon)$")
 });
+/// "Turn off the Wi-Fi", "Bluetooth on", "airplane mode on", "schalte das WLAN aus".
+static RADIO: LazyLock<Regex> = LazyLock::new(|| {
+    const K: &str = r"wi-?fi|wi fi|wlan|wireless|bluetooth|airplane mode|aeroplane mode|flight mode|flugmodus|flugzeugmodus";
+    re(&format!(r"^(?:turn|switch|put|set) (?P<s>on|off) (?:the |my )?(?P<k>{K})$|^(?:(?:turn|switch|put|set|schalte?|mach|mache|stell|stelle) )?(?:the |my |das |den |mein |meinen )?(?P<k2>{K})(?: back| wieder)? (?P<s2>on|off|an|ein|aus)$|^(?P<s3>enable|disable|activate|deactivate) (?:the |my )?(?P<k3>{K})$"))
+});
+/// "Switch to high performance mode", "set the power plan to balanced", "Energiesparmodus an".
+static POWER_PLAN: LazyLock<Regex> = LazyLock::new(|| {
+    const P: &str = r"high performance|best performance|maximum performance|balanced|power saver|power saving|battery saver|energy saver|energy saving";
+    re(&format!(r"^(?:switch|change|set|put)(?: the pc| my pc| my computer| windows| the computer)?(?: to| into| on)? (?:the )?(?P<p>{P}) (?:power |energy )?(?:plan|mode|profile)$|^(?:switch|change|set)(?: the| my)? power (?:plan|mode|profile) to (?P<p2>{P})$|^(?P<p3>{P}) (?:power |energy )?(?:plan|mode|profile)(?: on)?$|^(?:energiesparmodus|stromsparmodus)(?: an| ein)?$|^(?:schalte? |stell |stelle )?(?:den pc |windows )?auf (?P<p4>höchstleistung|ausbalanciert|energiesparen)(?: um)?$"))
+});
+/// "Switch Windows to dark mode", "light mode for the apps", "mach Windows dunkel" (his own
+/// look's "dark mode" is `intents`').
+static SYSTEM_THEME: LazyLock<Regex> = LazyLock::new(|| {
+    const W: &str = r"windows|the system|my system|my pc|the pc|my computer|the computer|my apps|the apps|plasma|kde|the desktop|my desktop";
+    re(&format!(r"^(?:switch|turn|set|put|make|change) (?:{W})(?: to| into)? (?:the )?(?P<m>dark|light)(?: mode| theme)?$|^(?:turn on |switch on |enable |use )?(?P<m2>dark|light) (?:mode|theme) (?:for|on|in) (?:{W})$|^(?:mach|mache|schalte?|stell|stelle) (?:windows|das system|den pc|den computer|plasma|kde|den desktop) (?:auf )?(?P<m3>dunkel|hell)(?: um)?$"))
+});
 
 /// An order about the PC: the tool's arguments.
 pub fn command(s: &str) -> Option<Value> {
@@ -95,6 +111,19 @@ pub fn command(s: &str) -> Option<Value> {
     }
     if MIC.is_match(s) {
         return Some(json!({"action": "mic"}));
+    }
+    if let Some(c) = RADIO.captures(s) {
+        let (kind, state) = (pick(&c, &["k", "k2", "k3"])?, pick(&c, &["s", "s2", "s3"])?);
+        let radio = if kind.contains("blue") { "bluetooth" } else if kind.contains("mode") || kind.starts_with("flug") { "airplane" } else { "wifi" };
+        return Some(json!({"action": "radio", "radio": radio, "on": matches!(state.as_str(), "on" | "an" | "ein" | "enable" | "activate")}));
+    }
+    if let Some(c) = POWER_PLAN.captures(s) {
+        let said = pick(&c, &["p", "p2", "p3", "p4"]).unwrap_or_else(|| s.to_string());
+        let plan = if said.contains("perform") || said.contains("höchst") { "performance" } else if said.contains("balanc") { "balanced" } else { "saver" };
+        return Some(json!({"action": "power_plan", "plan": plan}));
+    }
+    if let Some(c) = SYSTEM_THEME.captures(s) {
+        return Some(json!({"action": "theme", "dark": matches!(pick(&c, &["m", "m2", "m3"])?.as_str(), "dark" | "dunkel")}));
     }
     let c = END.captures(s)?;
     Some(json!({"action": "end", "pid": pick(&c, &["pid"])?.parse::<u32>().ok()?, "name": pick(&c, &["name"])?}))
@@ -327,8 +356,113 @@ pub async fn run(args: &Value) -> Result<String, String> {
             Ok(say(&line, &line))
         }
         "upgrade" => upgrade_all(),
+        "radio" => {
+            not_a_test()?;
+            let (kind, on) = (args["radio"].as_str().unwrap_or("wifi").to_string(), args["on"].as_bool().unwrap_or(true));
+            let name = match kind.as_str() {
+                "wifi" => "Wi-Fi",
+                "bluetooth" => "Bluetooth",
+                _ => "Airplane mode",
+            };
+            // (Airplane mode on is every radio off.)
+            let power = if kind == "airplane" { !on } else { on };
+            #[cfg(windows)]
+            let switched = tokio::task::spawn_blocking(move || set_radios(&kind, power)).await.map_err(|e| e.to_string())?;
+            #[cfg(not(windows))]
+            let switched = run_tool("rfkill", &[if power { "unblock" } else { "block" }, if kind == "wifi" { "wlan" } else if kind == "bluetooth" { "bluetooth" } else { "all" }]).await.map(|_| 1);
+            match switched.map_err(|e| format!("I couldn't switch {name}, Sir: {e}."))? {
+                0 => Ok(say(&format!("This PC has no {name} radio, Sir."), &format!("No {name} here, Sir."))),
+                _ => Ok(say(&format!("{name} is {}, Sir.", if on { "on" } else { "off" }), "Done, Sir.")),
+            }
+        }
+        "power_plan" => {
+            not_a_test()?;
+            let plan = args["plan"].as_str().unwrap_or("balanced");
+            let name = match plan {
+                "performance" => "high performance",
+                "saver" => "power saving",
+                _ => "balanced",
+            };
+            #[cfg(windows)]
+            run_tool("powercfg", &["/setactive", if plan == "performance" { "SCHEME_MIN" } else if plan == "saver" { "SCHEME_MAX" } else { "SCHEME_BALANCED" }])
+                .await
+                .map_err(|_| format!("I couldn't, Sir: this PC has no {name} plan (many have only Balanced)."))?;
+            #[cfg(not(windows))]
+            run_tool("powerprofilesctl", &["set", if plan == "performance" { "performance" } else if plan == "saver" { "power-saver" } else { "balanced" }]).await.map_err(|e| format!("I couldn't switch to {name}, Sir: {e}."))?;
+            Ok(say(&format!("The PC runs on {name} now, Sir."), "Done, Sir."))
+        }
+        "theme" => {
+            not_a_test()?;
+            let dark = args["dark"].as_bool().unwrap_or(true);
+            set_dark(dark).await.map_err(|e| format!("I couldn't change {OS}'s colours, Sir: {e}."))?;
+            Ok(say(&format!("{OS} is {} now, Sir.", if dark { "dark" } else { "light" }), "Done, Sir."))
+        }
         other => Err(format!("The PC helper has no action '{other}'.")),
     }
+}
+
+// ------------------------------------------------- radios, power plan, light or dark ----
+
+/// A system program run quietly to its end; what it complained of when it failed.
+async fn run_tool(bin: &str, args: &[&str]) -> Result<(), String> {
+    let path = crate::apps::which(bin).ok_or_else(|| format!("{bin} is not on this PC"))?;
+    let out = crate::shell::run_helper(&path, args, None, &[], std::time::Duration::from_secs(20)).await.map_err(|e| e.to_string())?;
+    if out.code == Some(0) {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(if out.stderr.is_empty() { &out.stdout } else { &out.stderr }).trim().to_string();
+    Err(if said.is_empty() { format!("{bin} failed") } else { said })
+}
+
+/// Switches the Wi-Fi, the Bluetooth or every radio ("airplane"); how many it switched.
+#[cfg(windows)]
+fn set_radios(kind: &str, on: bool) -> Result<usize, String> {
+    use windows::Devices::Radios::{Radio, RadioAccessStatus, RadioKind, RadioState};
+    if Radio::RequestAccessAsync().and_then(|op| op.get()).map_err(|e| e.to_string())? != RadioAccessStatus::Allowed {
+        return Err("Windows doesn't let me switch the radios".into());
+    }
+    let state = if on { RadioState::On } else { RadioState::Off };
+    let mut switched = 0;
+    for radio in Radio::GetRadiosAsync().and_then(|op| op.get()).map_err(|e| e.to_string())? {
+        let k = radio.Kind().map_err(|e| e.to_string())?;
+        if (kind == "wifi" && k != RadioKind::WiFi) || (kind == "bluetooth" && k != RadioKind::Bluetooth) {
+            continue;
+        }
+        switched += usize::from(radio.SetStateAsync(state).and_then(|op| op.get()).is_ok_and(|s| s == RadioAccessStatus::Allowed));
+    }
+    Ok(switched)
+}
+
+/// Windows' apps and taskbar dark or light, as Settings' "Choose your mode" sets them.
+#[cfg(windows)]
+async fn set_dark(dark: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::{ERROR_SUCCESS, LPARAM, WPARAM};
+        use windows::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD};
+        use windows::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE};
+        let (path, light) = (wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"), u32::from(!dark).to_le_bytes());
+        for name in ["AppsUseLightTheme", "SystemUsesLightTheme"] {
+            let name = wide(name);
+            // SAFETY: the strings and the data outlive the call.
+            if unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, PCWSTR(path.as_ptr()), PCWSTR(name.as_ptr()), REG_DWORD.0, Some(light.as_ptr().cast()), 4) } != ERROR_SUCCESS {
+                return Err("Windows refused the change".to_string());
+            }
+        }
+        // (The open windows and the taskbar take the new colours on this note.)
+        let area = wide("ImmersiveColorSet");
+        // SAFETY: the string outlives the call, which waits at most a second for each window.
+        let _ = unsafe { SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, WPARAM(0), LPARAM(area.as_ptr() as isize), SMTO_ABORTIFHUNG, 1000, None) };
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Plasma's colours dark or light (Breeze), as System Settings sets them.
+#[cfg(not(windows))]
+async fn set_dark(dark: bool) -> Result<(), String> {
+    run_tool("plasma-apply-colorscheme", &[if dark { "BreezeDark" } else { "BreezeLight" }]).await
 }
 
 #[cfg(windows)]
@@ -959,6 +1093,46 @@ mod tests {
         }
         for not in ["port 8080", "open discord", "start discord", "what's using my gpu", "who is frozen in the game"] {
             assert_eq!(command(&crate::intents::normalize_phrase(not)), None, "{not}");
+        }
+    }
+
+    #[test]
+    fn radios_power_plans_and_the_systems_colours_are_orders() {
+        let radio = |r: &str, on: bool| json!({"action": "radio", "radio": r, "on": on});
+        let plan = |p: &str| json!({"action": "power_plan", "plan": p});
+        let theme = |dark: bool| json!({"action": "theme", "dark": dark});
+        for (said, want) in [
+            ("Turn off the Wi-Fi.", radio("wifi", false)),
+            ("turn the wifi back on", radio("wifi", true)),
+            ("switch bluetooth on", radio("bluetooth", true)),
+            ("disable bluetooth", radio("bluetooth", false)),
+            ("airplane mode on", radio("airplane", true)),
+            ("schalte das WLAN aus", radio("wifi", false)),
+            ("Bluetooth an", radio("bluetooth", true)),
+            ("switch to high performance mode", plan("performance")),
+            ("power saver mode on", plan("saver")),
+            ("set the power plan to balanced", plan("balanced")),
+            ("schalte auf Höchstleistung", plan("performance")),
+            ("Energiesparmodus an", plan("saver")),
+            ("switch windows to dark mode", theme(true)),
+            ("light mode for the apps", theme(false)),
+            ("mach Windows dunkel", theme(true)),
+        ] {
+            assert_eq!(command(&crate::intents::normalize_phrase(said)), Some(want), "{said}");
+        }
+        for not in ["is the wifi on", "dark mode", "turn on the lights", "switch to balanced", "who's on my wifi", "what's my wifi password", "show me flights"] {
+            assert_eq!(command(&crate::intents::normalize_phrase(not)), None, "{not}");
+        }
+        // No other road takes them first.
+        let feature = crate::changes::EXPLANATIONS.iter().find(|e| e.id == "pc_switches").expect("explained");
+        for said in feature.say {
+            let routed = crate::phrasings::route(&crate::wake::canon(said)).map(|(name, _)| name).unwrap_or_default();
+            assert_eq!(routed, "pc_helper", "\"{said}\"");
+        }
+        // And a test never switches anything.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        for args in [radio("wifi", false), plan("saver"), theme(true)] {
+            assert!(rt.block_on(run(&args)).is_err(), "{args}");
         }
     }
 

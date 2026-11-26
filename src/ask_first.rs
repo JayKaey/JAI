@@ -123,6 +123,7 @@ fn guess(order: &[String], tool: &str, args: &Value) -> Option<(String, Vec<&'st
         // ------------------------------------------------ protocols, routines, scenes ----
         ("manage_stark_protocol", "create" | "save" | "add" | "update") => (format!("create a protocol called {}", quoted(&["protocol_name", "name", "protocol"], "something")), own(&["protocol", "protokoll", "routine", "macro", "makro"])),
         ("manage_stark_protocol", "delete" | "remove") => (format!("delete the protocol {}", quoted(&["protocol_name", "name", "protocol"], "you mean")), own(&["protocol", "protokoll", "routine", "macro", "makro"])),
+        ("manage_stark_protocol", "add_step" | "remove_step" | "rename" | "change") => (format!("change the protocol {}", quoted(&["protocol_name", "name", "protocol"], "you mean")), own(&["protocol", "protokoll", "routine", "macro", "makro"])),
         ("manage_stark_protocol", "capture_current_workspace" | "capture" | "save_workspace" | "snapshot" | "capture_workspace" | "save_current_setup") => (
             format!("save your windows as they stand as {}", quoted(&["protocol_name", "name", "protocol"], "a protocol")),
             own(&["protocol", "protokoll", "layout", "setup", "workspace", "desk", "arrangement", "windows", "fenster", "anordnung", "arbeitsplatz", "arbeitsbereich", "schreibtisch"]),

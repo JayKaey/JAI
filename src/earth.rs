@@ -850,6 +850,28 @@ pub struct Marker {
     pub lon: f64,
 }
 
+/// The aircraft followed: its last fix, flown on until the next (`flight_track::ahead`), and
+/// the way it came.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Followed {
+    pub fix: crate::flight_track::Plane,
+    /// When the fix was heard (its age in the feed taken off).
+    pub at: Instant,
+    /// Its fixes so far: the trail drawn behind it.
+    pub trail: Vec<(f64, f64)>,
+    /// Its destination airport: the dashed line ahead runs there.
+    pub to: Option<(f64, f64)>,
+    /// Whether the camera rides along (a drag of the map lets go).
+    pub camera: bool,
+}
+
+impl Followed {
+    /// Where it is now.
+    pub fn now(&self) -> (f64, f64) {
+        crate::flight_track::ahead(&self.fix, self.at.elapsed().as_secs_f64())
+    }
+}
+
 /// "Earthquakes in this area": the circle on the map and the drawer under it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AreaQuery {
@@ -2098,6 +2120,8 @@ pub struct Earth {
     /// other way. Kept while the view stays open, so "spin it again" turns as it last did.
     pub spin_dir: f64,
     pub marker: Option<Marker>,
+    /// The aircraft followed (`flight_track`): the marker rides on it between fixes.
+    pub followed: Option<Followed>,
     pub area: Option<AreaQuery>,
     pub quakes: Feed<Quake>,
     pub events: Feed<GeoEvent>,
@@ -2287,6 +2311,7 @@ impl Earth {
             spin: false,
             spin_dir: 1.0,
             marker: None,
+            followed: None,
             area: None,
             quakes: Feed::default(),
             events: Feed::default(),
@@ -2552,6 +2577,9 @@ impl Earth {
         self.spin = false;
         self.tour = None;
         self.inertia = None;
+        if let Some(f) = &mut self.followed {
+            f.camera = false;
+        }
         if let Some(Motion::Fly { .. }) = self.motion {
             self.motion = None;
             self.queued = None;
@@ -2607,6 +2635,20 @@ impl Earth {
         if self.spin && self.motion.is_none() {
             moving = true;
             self.cam.lon = wrap_lon(self.cam.lon - SPIN_DEG_PER_SEC * self.spin_dir * dt);
+        }
+        // The followed aircraft flown on between its fixes, the camera with it. (Not `moving`:
+        // the view asks for as many frames as it needs to move a pixel, `gui_earth`.)
+        if self.followed.is_some() && crate::flight_track::following().is_none() {
+            self.followed = None;
+        }
+        if let Some(f) = &self.followed {
+            let (lat, lon) = f.now();
+            if let Some(m) = &mut self.marker {
+                (m.lat, m.lon) = (lat, lon);
+            }
+            if f.camera && self.motion.is_none() && self.queued.is_none() {
+                (self.cam.lat, self.cam.lon) = (lat, lon);
+            }
         }
         if self.tour.is_some() {
             self.step_tour(now);
@@ -4298,34 +4340,48 @@ async fn track(from: Option<String>, to: Option<String>, flight: Option<String>,
             }
             (Err(e), _) | (_, Err(e)) => Err(e),
         },
-        _ => Err("no route and no callsign".into()),
+        _ => Err("tell me its flight number, or where it flies from and to".into()),
     };
     let (plane, route) = match found {
         Ok(found) => found,
-        Err(e) => return (format!("No flight found: {e}."), format!("I can't find a flight{between} in the air right now, Sir. Far out over an ocean they're beyond the receivers.")),
+        // (Why, as it is said: Sir, 2026-11-26.)
+        Err(e) => {
+            let e = e.trim_end_matches('.');
+            return (format!("No flight found: {e}."), format!("I can't find a flight{between} in the air right now, Sir: {e}."));
+        }
     };
     let label = format!("{}{}", plane.callsign, route.as_ref().map(|r| format!(" · {}", r.codes.replace('-', " → "))).unwrap_or_default());
-    show_plane(&plane, &label, false);
+    show_plane(&plane, &label, false, route.as_ref().and_then(|r| r.airports.last()).map(|a| (a.1, a.2)));
     crate::flight_track::follow(&plane, label.clone());
     let over = fetch_place(plane.lat, plane.lon).await.map(|p| p.spoken()).filter(|s| !s.is_empty()).unwrap_or_else(|| spoken_coords(plane.lat, plane.lon));
     let height = plane.alt_ft.map_or_else(String::new, |ft| format!(" at {} feet", group_digits(ft.round() as i64)));
-    let digits = plane.callsign.find(|c: char| c.is_ascii_digit()).unwrap_or(plane.callsign.len());
-    let (airline, number) = plane.callsign.split_at(digits);
     (
         format!("Following {label}: {}{height}, {} kn.", coords_label(plane.lat, plane.lon), plane.speed_kt.round()),
-        format!("Following {airline} {number}{between}, Sir. It's over {over}{height}."),
+        format!("Following {}{between}, Sir. It's over {over}{height}.", crate::flight_track::spoken(&plane.callsign)),
     )
 }
 
-/// The followed aircraft: the marker on it, the camera over it (down to 900 km the first time,
-/// at Sir's own height after: `keep`).
-pub fn show_plane(plane: &crate::flight_track::Plane, label: &str, keep: bool) {
+/// A fix of the followed aircraft: the marker on it and its trail. The first (`keep` false,
+/// with its destination `to`) flies the camera down to 900 km over it; after that the camera
+/// rides along at Sir's own height (`Earth::step`).
+pub fn show_plane(plane: &crate::flight_track::Plane, label: &str, keep: bool, to: Option<(f64, f64)>) {
     {
         let mut st = state();
         let height = plane.alt_ft.map_or_else(|| "on the ground".to_string(), |ft| format!("{} ft", group_digits(ft.round() as i64)));
         st.marker = Some(Marker { name: format!("{label} · {height}"), lat: plane.lat, lon: plane.lon });
-        let alt = if keep { st.target().alt } else { 900.0 };
-        st.fly_to(Camera { lat: plane.lat, lon: plane.lon, alt });
+        let at = Instant::now().checked_sub(Duration::from_secs_f64(plane.age.clamp(0.0, 30.0))).unwrap_or_else(Instant::now);
+        let (mut trail, to, camera) = match st.followed.take().filter(|_| keep) {
+            Some(f) => (f.trail, f.to, f.camera),
+            None => (Vec::new(), to, true),
+        };
+        if trail.len() >= 3_000 {
+            trail.remove(0);
+        }
+        trail.push((plane.lat, plane.lon));
+        st.followed = Some(Followed { fix: plane.clone(), at, trail, to, camera });
+        if !keep {
+            st.fly_to(Camera { lat: plane.lat, lon: plane.lon, alt: 900.0 });
+        }
     }
     crate::gui::refresh();
 }

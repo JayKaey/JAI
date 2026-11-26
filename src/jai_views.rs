@@ -245,6 +245,9 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
         return Err("JAI is running without a display (headless), so he cannot open windows.".into());
     }
     let on = on_monitor(args);
+    // Up already, behind another program's window: in front again (Sir, 2026-11-26: "that
+    // window should be in front of all other windows so that i can see it").
+    crate::own_windows::to_front(&view.id().replace('_', " "));
     match view {
         // live layers (C1): satellite passes, road traffic, another day's weather, rain soon.
         JaiSubWindow::Live => crate::live_layers::run_view(ctx, args).await,
@@ -330,12 +333,7 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             Ok(format!("{out}\nSpoken: Your gym coach and this month's finances are up{on}, Sir."))
         }
         JaiSubWindow::Contacts => {
-            let contacts = Box::pin(ctx.execute("manage_contacts", &json!({ "action": "list" }))).await;
-            let markdown = if contacts.success {
-                format!("## Contacts\n\n{}", display_part(&contacts.output))
-            } else {
-                format!("_Contacts are not available: {}_", display_part(contacts.output.trim_start_matches("Error: ")))
-            };
+            let markdown = crate::contacts::window_markdown(&ctx.stark.contacts.list());
             let out = markdown_window(ctx, view, markdown, args, (480, 560)).await?;
             Ok(format!("{out}\nSpoken: Your contacts{on}, Sir."))
         }

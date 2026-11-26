@@ -1494,6 +1494,24 @@ static SAID: Mutex<(u64, Vec<(String, Option<Instant>)>)> = Mutex::new((0, Vec::
 /// What a stop cut off, and when ("go on" says it again: `cut_off`).
 static CUT: Mutex<Option<(Instant, String)>> = Mutex::new(None);
 
+/// Whether words heard while he spoke are his own, back from the speakers: most of them are
+/// in the reply he is saying (or was, until a moment ago).
+pub fn echoes_him(heard: &str) -> bool {
+    let said = SAID.lock().unwrap_or_else(|e| e.into_inner()).1.iter().map(|(text, _)| text.clone()).collect::<Vec<_>>().join(" ");
+    echo_of(heard, &said)
+}
+
+/// Seven in ten of the words heard are words of `said`. One word alone is never an echo: "stop".
+fn echo_of(heard: &str, said: &str) -> bool {
+    let words = |s: &str| s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 2).map(String::from).collect::<Vec<_>>();
+    let (heard, said) = (words(heard), words(said));
+    if heard.len() < 2 {
+        return false;
+    }
+    let found = heard.iter().filter(|w| said.iter().any(|s| s == *w || strsim::jaro_winkler(s, w) >= 0.9)).count();
+    found * 10 >= heard.len() * 7
+}
+
 /// The text a stop at `now` cut off: from the start of the sentence that was playing to the end
 /// of the reply. None when everything had been heard.
 fn cut_from(clauses: &[(String, Option<Instant>)], now: Instant) -> Option<String> {
@@ -2187,6 +2205,20 @@ pub fn dual_sink_probe() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sir, 2026-11-26: over speakers "he hears himself and responds to himself". What Whisper
+    /// makes of his own voice is mostly his own words; Sir speaking over him is not.
+    #[test]
+    fn his_own_words_heard_back_are_an_echo_and_sirs_are_not() {
+        let said = "The weather in Musterstadt is sunny, Sir, with twenty degrees this afternoon.";
+        for echo in ["the weather in Musterstadt is sunny", "Weather in Musterstadt. Sunny with twenty degrees.", "with twenty degrees this afternoon"] {
+            assert!(echo_of(echo, said), "{echo}");
+        }
+        for sir in ["Stop.", "stop talking", "No, that's wrong", "What about tomorrow?", "open the weather window", "sunny"] {
+            assert!(!echo_of(sir, said), "{sir}");
+        }
+        assert!(!echo_of("the weather in Musterstadt", ""), "nothing said, no echo");
+    }
 
     /// Cut off mid-reply, he keeps what was not heard from the start of the sentence that was
     /// playing; a reply heard to its end leaves nothing.

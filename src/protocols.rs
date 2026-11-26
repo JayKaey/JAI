@@ -615,6 +615,96 @@ pub fn display_name(name: &str) -> String {
     format!("{} Protocol", title.join(" ").replace(" And ", " & "))
 }
 
+/// Its steps in plain words, numbered: "1. Open Steam; 2. Play my rock playlist".
+fn steps_said(p: &Protocol) -> String {
+    p.steps.iter().enumerate().map(|(i, s)| format!("{}. {}", i + 1, s.words())).collect::<Vec<_>>().join("; ")
+}
+
+/// What a protocol does ("what does the gaming protocol do").
+pub fn described(p: &Protocol) -> String {
+    let when = if p.when.is_empty() { String::new() } else { format!(" It runs by itself when {}.", p.when.join(", or when ")) };
+    let also = if p.trigger_phrases.is_empty() { String::new() } else { format!(" You can also say \"{}\".", p.trigger_phrases.join("\" or \"")) };
+    format!("The {}, Sir: {}.{when}{also}", display_name(&p.name), steps_said(p))
+}
+
+/// The step he means: its number ("step 2", "the second step", "the last one") or its words.
+fn which_step(steps: &[Step], said: &str) -> Option<usize> {
+    const ORDINALS: [&[&str]; 5] = [&["first", "ersten", "erste"], &["second", "zweiten", "zweite"], &["third", "dritten", "dritte"], &["fourth", "vierten", "vierte"], &["fifth", "fünften", "fünfte"]];
+    let s = said.trim().to_lowercase();
+    let words: Vec<&str> = s.split_whitespace().filter(|w| !matches!(*w, "the" | "step" | "one" | "den" | "der" | "schritt" | "number" | "nummer")).collect();
+    let numbered = match words.as_slice() {
+        [w] if w.parse::<usize>().is_ok_and(|n| n >= 1) => w.parse::<usize>().ok().map(|n| n - 1),
+        [w] if matches!(*w, "last" | "letzten" | "letzte") => steps.len().checked_sub(1),
+        [w] => ORDINALS.iter().position(|names| names.contains(w)),
+        _ => None,
+    };
+    if let Some(at) = numbered {
+        return (at < steps.len()).then_some(at);
+    }
+    let said: String = words.join(" ");
+    let near = |s: &Step| {
+        let w = s.words().to_lowercase();
+        if w.contains(&said) || (!w.is_empty() && said.contains(&w)) { 1.0 } else { strsim::jaro_winkler(&w, &said) }
+    };
+    steps.iter().enumerate().map(|(i, s)| (i, near(s))).filter(|(_, score)| *score >= 0.85).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i)
+}
+
+/// A protocol changed by his word, and the line that says so: `add_step` (`step` in his
+/// words, or `steps`), `remove_step` (`step`: its words or its number), `rename` (`new_name`),
+/// `update` (what is given replaces what was; the rest stays as it was).
+pub fn edit(was: &Protocol, action: &str, args: &Value) -> Result<(Protocol, String), String> {
+    let mut p = was.clone();
+    let shown = display_name(&p.name);
+    let said = str_arg(args, &["step", "order", "words"]).unwrap_or("").trim();
+    let line = match action {
+        "add_step" | "add_steps" => {
+            let new: Vec<Step> = if said.is_empty() { parse_steps(args) } else { Step::of_line(said).into_iter().collect() };
+            if new.is_empty() {
+                return Err(format!("What should the {shown} do as well, Sir?"));
+            }
+            let mut words = new.iter().map(Step::words).collect::<Vec<_>>().join(", then ");
+            if let Some(first) = words.get(..1) {
+                words = first.to_lowercase() + &words[1..];
+            }
+            p.steps.extend(new);
+            format!("Done, Sir. The {shown} will {words} as well; that makes {} steps.", p.steps.len())
+        }
+        "remove_step" => {
+            let at = which_step(&p.steps, said).ok_or_else(|| format!("The {shown} has no step \"{said}\", Sir. Its steps: {}.", steps_said(&p)))?;
+            if p.steps.len() == 1 {
+                return Err(format!("That is the {shown}'s only step, Sir. Say \"delete the {} protocol\" to let it go.", p.name));
+            }
+            let gone = p.steps.remove(at);
+            format!("Done, Sir. The {shown} no longer does \"{}\"; {} steps are left.", gone.words(), p.steps.len())
+        }
+        "rename" => {
+            let new = str_arg(args, &["new_name", "to"]).unwrap_or("").trim();
+            if new.is_empty() {
+                return Err("What should it be called, Sir?".into());
+            }
+            p.name = new.to_string();
+            format!("Done, Sir. It is the {} now.", display_name(&key(new)))
+        }
+        _ => {
+            if let Some(d) = str_arg(args, &["description"]) {
+                p.description = d.to_string();
+            }
+            if let Some(t) = args.get("trigger_phrases").and_then(Value::as_array) {
+                p.trigger_phrases = t.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            }
+            let steps = parse_steps(args);
+            if !steps.is_empty() {
+                p.steps = steps;
+            }
+            if let Some(new) = str_arg(args, &["new_name"]) {
+                p.name = new.to_string();
+            }
+            format!("Done, Sir. The {} now does this: {}.", display_name(&key(&p.name)), steps_said(&p))
+        }
+    };
+    Ok((p, line))
+}
+
 /// One application window of a captured workspace.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapturedWindow {
@@ -732,10 +822,12 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "manage_stark_protocol",
-            "description": "Stark Protocols: named workspace setups and routines. execute_protocol (\"initiate coding protocol\": launches apps, moves windows to their monitors, opens live windows, starts music); capture_current_workspace (\"save my current setup as Gaming Protocol\": records every open app's monitor, position and size, your live windows and the playlist); list; create (steps [{tool, args}]); delete.",
+            "description": "Stark Protocols: named workspace setups and routines. execute_protocol (\"initiate coding protocol\": launches apps, moves windows to their monitors, opens live windows, starts music); capture_current_workspace (\"save my current setup as Gaming Protocol\": records every open app's monitor, position and size, your live windows and the playlist); list; describe (its steps); edit (opens it in the protocol window); create (steps [{tool, args}], or {tool: \"order\", args: {order: \"open Spotify\"}} for a step in Sir's words); add_step / remove_step (step: in Sir's words, or its number); rename (new_name); update (only what is given changes); delete.",
             "parameters": {"type": "object", "properties": {
-                "action": {"type": "string", "enum": ["execute_protocol", "capture_current_workspace", "list", "create", "delete"]},
+                "action": {"type": "string", "enum": ["execute_protocol", "capture_current_workspace", "list", "describe", "edit", "create", "add_step", "remove_step", "rename", "update", "delete"]},
                 "protocol_name": {"type": "string"},
+                "step": {"type": "string"},
+                "new_name": {"type": "string"},
                 "description": {"type": "string"},
                 "trigger_phrases": {"type": "array", "items": {"type": "string"}},
                 "steps": {"type": "array", "items": {"type": "object", "properties": {"tool": {"type": "string"}, "args": {"type": "object"}}}}
@@ -876,5 +968,34 @@ mod tests {
         for order in ["open Discord", "play my gym playlist", "set the volume to 40", "move Spotify to monitor 2", "öffne Discord", "dim the lights"] {
             assert!(!wants_an_answer(order), "{order}");
         }
+    }
+
+    /// Sir, 2026-11-26: his protocols changed by his word, a step at a time.
+    #[test]
+    fn a_protocol_is_changed_a_step_at_a_time() {
+        let steps = |lines: &[&str]| lines.iter().filter_map(|l| Step::of_line(l)).collect::<Vec<_>>();
+        let p = Protocol { name: "gaming".into(), description: String::new(), trigger_phrases: vec!["gaming mode".into()], when: vec!["Minecraft starts".into()], steps: steps(&["open Steam", "open Discord", "play my rock playlist"]) };
+        let (added, line) = edit(&p, "add_step", &json!({"step": "set the volume to 30"})).expect("added");
+        assert_eq!(added.steps.last(), Step::of_line("set the volume to 30").as_ref());
+        assert_eq!((added.when.clone(), added.trigger_phrases.clone()), (p.when.clone(), p.trigger_phrases.clone()), "what starts it stays");
+        assert!(line.contains("set the volume to 30 as well"), "{line}");
+        for (said, left) in [
+            ("discord", ["open Steam", "play my rock playlist"]),
+            ("step 1", ["open Discord", "play my rock playlist"]),
+            ("the second one", ["open Steam", "play my rock playlist"]),
+            ("the last step", ["open Steam", "open Discord"]),
+        ] {
+            assert_eq!(edit(&p, "remove_step", &json!({"step": said})).expect(said).0.steps, steps(&left), "{said}");
+        }
+        assert!(edit(&p, "remove_step", &json!({"step": "teleport me"})).unwrap_err().contains("Its steps: 1. open Steam"));
+        let one = Protocol { steps: steps(&["open Steam"]), ..p.clone() };
+        assert!(edit(&one, "remove_step", &json!({"step": "steam"})).unwrap_err().contains("only step"));
+        let (renamed, line) = edit(&p, "rename", &json!({"new_name": "focus"})).expect("renamed");
+        assert_eq!((renamed.name.as_str(), renamed.steps.len()), ("focus", 3));
+        assert!(line.contains("Focus Protocol"), "{line}");
+        let (updated, _) = edit(&p, "update", &json!({"description": "for the evening"})).expect("updated");
+        assert_eq!((updated.description.as_str(), &updated.steps), ("for the evening", &p.steps), "only what is given changes");
+        let said = described(&p);
+        assert!(said.contains("1. open Steam; 2. open Discord") && said.contains("Minecraft starts") && said.contains("gaming mode"), "{said}");
     }
 }

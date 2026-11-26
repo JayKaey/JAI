@@ -131,7 +131,10 @@ fn words_of(text: &str) -> String {
 pub fn names(title: &str, name: &str) -> bool {
     let name = words_of(name);
     if !name.contains(' ') {
-        return !name.is_empty() && title.split(['\u{2014}', '/', '|', ':']).any(|part| words_of(part).rsplit(' ').next() == Some(name.as_str()));
+        // ("The protocol window" is "Protocols — J.A.I.": one or more of it. Not "the new
+        // window" for "News", a short word.)
+        let one = |w: &str| if w.len() > 5 { w.strip_suffix('s').unwrap_or(w) } else { w }.to_string();
+        return !name.is_empty() && title.split(['\u{2014}', '/', '|', ':']).any(|part| words_of(part).rsplit(' ').next().is_some_and(|last| one(last) == one(&name)));
     }
     format!(" {} ", words_of(title)).contains(&format!(" {name} "))
 }
@@ -167,27 +170,61 @@ pub fn open(name: &str) -> bool {
     return find(name).is_some();
 }
 
-/// Where (x, y, w, h) a window standing at `rect` (left, top, right, bottom) goes for a place
-/// and a size in the work area `work`, the gap round it: the views' own geometry, in pixels.
-/// Sent somewhere at its own size (the middle, another monitor), it keeps off `others` (his
-/// other windows) as a new window does, or covers them least where the monitor has no room
-/// (Sir, 2026-11-21: "when he moves windows he should do the same thing"); a half, a third or
-/// a quarter is the part of the screen Sir chose, and only "overlap the windows" lets it lie
-/// on them otherwise.
-fn within(work: [i32; 4], rect: [i32; 4], position: Option<Position>, size: Option<Size>, others: &[[i32; 4]]) -> [i32; 4] {
-    let px = |[l, t, r, b]: [i32; 4]| eframe::egui::Rect::from_min_max(eframe::egui::pos2(l as f32, t as f32), eframe::egui::pos2(r as f32, b as f32));
-    let area = px(work).shrink(GAP as f32);
-    let mut to = crate::window_commands::target_rect(area, px(rect), position, size);
-    if position == Some(Position::Centre) && !crate::hud_dock::overlap_allowed() {
-        let others: Vec<_> = others.iter().map(|o| px(*o)).collect();
-        to = crate::holo_stage::settle(area, to, &others, GAP as f32, crate::gui::WINDOW_TITLE_ROW);
-    }
-    [to.min.x.round() as i32, to.min.y.round() as i32, to.width().round() as i32, to.height().round() as i32]
+/// A rect (left, top, right, bottom, in pixels) as egui's.
+fn px([l, t, r, b]: [i32; 4]) -> eframe::egui::Rect {
+    eframe::egui::Rect::from_min_max(eframe::egui::pos2(l as f32, t as f32), eframe::egui::pos2(r as f32, b as f32))
 }
 
-/// Where his windows but `window` stand (left, top, right, bottom).
-fn others_than(window: isize) -> Vec<[i32; 4]> {
-    list().into_iter().filter(|w| w.hwnd != window).map(|w| w.rect).collect()
+/// An egui rect as x, y, w, h in pixels.
+fn xywh(r: eframe::egui::Rect) -> [i32; 4] {
+    [r.min.x.round() as i32, r.min.y.round() as i32, r.width().round() as i32, r.height().round() as i32]
+}
+
+/// Where (x, y, w, h) a window standing at `rect` (left, top, right, bottom) goes for a place
+/// and a size in the work area `work`, the gap round it: the views' own geometry, in pixels.
+/// Exactly where Sir sent it: his other windows make way (`make_room`).
+fn within(work: [i32; 4], rect: [i32; 4], position: Option<Position>, size: Option<Size>) -> [i32; 4] {
+    xywh(crate::window_commands::target_rect(px(work).shrink(GAP as f32), px(rect), position, size))
+}
+
+/// Where each of `windows` (handle, rect: left, top, right, bottom) that stands on `room` goes
+/// to make way for it: the nearest spot of its monitor's work area (`work_of`) off `room` and
+/// off the others, else where it covers them least (`holo_stage::settle`). (handle, from, to),
+/// each x, y, w, h.
+pub fn out_of_the_way(room: [i32; 4], windows: &[(isize, [i32; 4])], work_of: impl Fn([i32; 4]) -> [i32; 4]) -> Vec<(isize, [i32; 4], [i32; 4])> {
+    let in_the_way = |rect: &[i32; 4]| px(*rect).intersects(px(room).shrink(1.0));
+    let mut taken: Vec<_> = std::iter::once(px(room)).chain(windows.iter().filter(|(_, r)| !in_the_way(r)).map(|(_, r)| px(*r))).collect();
+    windows
+        .iter()
+        .filter(|(_, r)| in_the_way(r))
+        .map(|(hwnd, rect)| {
+            let to = crate::holo_stage::settle(px(work_of(*rect)).shrink(GAP as f32), px(*rect), &taken, GAP as f32, crate::gui::WINDOW_TITLE_ROW);
+            taken.push(to);
+            (*hwnd, xywh(px(*rect)), xywh(to))
+        })
+        .collect()
+}
+
+/// His windows standing on `room` (left, top, right, bottom), all but `keep`, glide out of its
+/// way, unless Sir said "overlap the windows". (Sir, 2026-11-26: "when i say \"move the earth
+/// window to the middle of the screen\" and there are already windows there than he should
+/// move those windows away".)
+pub fn make_room(room: [i32; 4], keep: Option<isize>) {
+    if crate::hud_dock::overlap_allowed() {
+        return;
+    }
+    let monitors = crate::monitors::recent();
+    let work_of = |[l, t, r, b]: [i32; 4]| monitors.iter().find(|m| m.contains((l + r) / 2, (t + b) / 2)).or_else(|| crate::monitors::primary(&monitors)).map_or([l, t, r, b], |m| m.work);
+    let windows: Vec<(isize, [i32; 4])> = list().into_iter().filter(|w| Some(w.hwnd) != keep).map(|w| (w.hwnd, w.rect)).collect();
+    for (hwnd, from, to) in out_of_the_way(room, &windows, work_of) {
+        glide(hwnd, from, to);
+    }
+}
+
+/// The window of his Sir means by `name` in front of every other program's window, without the
+/// keyboard. Whether one stands there.
+pub fn to_front(name: &str) -> bool {
+    find(name).map(|w| desk::raise(w.hwnd)).is_some()
 }
 
 /// What a window is called in a sentence: its title without his name after it.
@@ -203,7 +240,13 @@ pub fn arrange(name: &str, position: Option<Position>, size: Option<Size>) -> Op
     let monitors = crate::monitors::recent();
     let [l, t, r, b] = window.rect;
     let on = monitors.iter().find(|m| m.contains((l + r) / 2, (t + b) / 2)).or_else(|| crate::monitors::primary(&monitors))?;
-    glide(window.hwnd, [l, t, r - l, b - t], within(on.work, window.rect, position, size, &others_than(window.hwnd)));
+    let [x, y, w, h] = within(on.work, window.rect, position, size);
+    // (A place Sir named is cleared for it; a window made larger where it stands pushes none.)
+    if position.is_some() {
+        make_room([x, y, x + w, y + h], Some(window.hwnd));
+    }
+    glide(window.hwnd, [l, t, r - l, b - t], [x, y, w, h]);
+    desk::raise(window.hwnd);
     Some(window.title)
 }
 
@@ -222,7 +265,10 @@ pub fn to_monitor(name: &str, monitor: &serde_json::Value) -> Option<Result<Stri
     if current == Some(index) {
         return Some(Ok(format!("My window '{}' is already on Monitor {index}.", called(&window.title))));
     }
-    glide(window.hwnd, [l, t, r - l, b - t], within(on.work, window.rect, Some(Position::Centre), None, &others_than(window.hwnd)));
+    let [x, y, w, h] = within(on.work, window.rect, Some(Position::Centre), None);
+    make_room([x, y, x + w, y + h], Some(window.hwnd));
+    glide(window.hwnd, [l, t, r - l, b - t], [x, y, w, h]);
+    desk::raise(window.hwnd);
     Some(Ok(format!("My window '{}' is on Monitor {index} now.\nSpoken: On monitor {index}, Sir.", called(&window.title))))
 }
 
@@ -321,10 +367,11 @@ pub fn opening_place(title: &str, code: [Option<[f32; 2]>; 2], by_order: bool, f
     opened_at(&mut lock(&OPENED), title, code, || place)
 }
 
-/// The windows that came up at the place they had before and are still up, by title, with that
-/// place (x, y, w, h): before they have shown themselves, Windows does not list them yet.
+/// The pieces of the board that came up at the place they had before and are still up, by
+/// title, with that place (x, y, w, h): before they have shown themselves, Windows does not
+/// list them yet. (A view takes only its size from there: it opens in the middle.)
 pub fn opening_now() -> Vec<(String, [i32; 4])> {
-    lock(&OPENED).iter().filter_map(|(title, _, place)| place.map(|place| (title.clone(), place))).collect()
+    lock(&OPENED).iter().filter(|(_, code, _)| code[0].is_some()).filter_map(|(title, _, place)| place.map(|place| (title.clone(), place))).collect()
 }
 
 fn opened_at(opened: &mut Vec<(String, [Option<[f32; 2]>; 2], Option<[i32; 4]>)>, title: &str, code: [Option<[f32; 2]>; 2], place: impl FnOnce() -> Option<[i32; 4]>) -> Option<[i32; 4]> {
@@ -431,12 +478,14 @@ mod tests {
             ("WEBUNTIS // TIMETABLE \u{2014} J.A.I.", "the timetable"),
             ("Projectile \u{2014} J.A.I. Simulation Lab", "the simulation lab"),
             ("Changes \u{2014} J.A.I.", "Changes"),
+            // (jai.log, 2026-11-22: "move the protocol window to my main monitor".)
+            ("Protocols \u{2014} J.A.I.", "the protocol window"),
         ] {
             assert!(names(title, name), "{name:?} is {title:?}");
         }
         // (A word inside a name is not the name: "make the text bigger" is the HUD's text, and
         // "discord" Sir's program.)
-        for (title, name) in [("Text Console \u{2014} J.A.I.", "discord"), ("Changes \u{2014} J.A.I.", "exchange"), ("Changes \u{2014} J.A.I.", ""), ("History \u{2014} J.A.I.", "the window"), ("Text Console \u{2014} J.A.I.", "console text"), ("Text Console \u{2014} J.A.I.", "the text"), ("Discord Audio \u{2014} J.A.I.", "discord")] {
+        for (title, name) in [("Text Console \u{2014} J.A.I.", "discord"), ("Changes \u{2014} J.A.I.", "exchange"), ("Changes \u{2014} J.A.I.", ""), ("History \u{2014} J.A.I.", "the window"), ("Text Console \u{2014} J.A.I.", "console text"), ("Text Console \u{2014} J.A.I.", "the text"), ("Discord Audio \u{2014} J.A.I.", "discord"), ("News \u{2014} J.A.I.", "the new window")] {
             assert!(!names(title, name), "{name:?} is not {title:?}");
         }
     }
@@ -446,26 +495,38 @@ mod tests {
         // A monitor to the right of the first, its taskbar under it; a window standing on it.
         let work = [2560, 0, 5120, 1392];
         let rect = [2700, 200, 3140, 840];
-        assert_eq!(within(work, rect, Some(Position::Left), None, &[]), [2574, 14, 1266, 1364]);
-        assert_eq!(within(work, rect, Some(Position::Right), None, &[]), [3840, 14, 1266, 1364]);
-        assert_eq!(within(work, rect, Some(Position::TopRight), None, &[]), [3840, 14, 1266, 682]);
-        assert_eq!(within(work, rect, Some(Position::BottomLeft), None, &[]), [2574, 696, 1266, 682]);
-        assert_eq!(within(work, rect, Some(Position::Centre), None, &[]), [3620, 376, 440, 640], "in the middle at its own size");
-        assert_eq!(within(work, rect, None, Some(Size::Percent(100.0)), &[]), [2574, 14, 2532, 1364], "the whole screen");
-        assert_eq!(within(work, rect, None, Some(Size::Bigger), &[]), [2645, 120, 550, 800], "larger about its middle");
+        assert_eq!(within(work, rect, Some(Position::Left), None), [2574, 14, 1266, 1364]);
+        assert_eq!(within(work, rect, Some(Position::Right), None), [3840, 14, 1266, 1364]);
+        assert_eq!(within(work, rect, Some(Position::TopRight), None), [3840, 14, 1266, 682]);
+        assert_eq!(within(work, rect, Some(Position::BottomLeft), None), [2574, 696, 1266, 682]);
+        assert_eq!(within(work, rect, None, Some(Size::Percent(100.0))), [2574, 14, 2532, 1364], "the whole screen");
+        assert_eq!(within(work, rect, None, Some(Size::Bigger)), [2645, 120, 550, 800], "larger about its middle");
         // Wherever it is sent, at whatever size, it stays inside the work area.
         for position in Position::ALL {
-            let [x, y, w, h] = within(work, [0, 0, 9000, 9000], Some(position), None, &[]);
+            let [x, y, w, h] = within(work, [0, 0, 9000, 9000], Some(position), None);
             assert!(x >= work[0] && y >= work[1] && x + w <= work[2] && y + h <= work[3], "{position:?}: {x},{y} {w}x{h}");
         }
-        // Sir, 2026-11-21: sent to the middle of a monitor where another of his windows stands
-        // ("move the admin window to my second monitor"), it lands beside that one, not on it.
-        let there = [3500, 300, 4300, 1000];
-        let [x, y, w, h] = within(work, rect, Some(Position::Centre), None, &[there]);
-        assert_eq!((w, h), (440, 640), "at its own size");
-        assert!(x + w <= there[0] || x >= there[2] || y + h <= there[1] || y >= there[3], "on the other window: {x},{y}");
+        // Sir, 2026-11-26: "move the earth window to the middle of the screen" where another of
+        // his windows stands. Until then it landed beside that one ("The earth is in the middle,
+        // Sir.", and it was not); now it goes exactly there, and only the window in its way
+        // makes way, at its own size, onto neither it nor another.
+        let middle = within(work, rect, Some(Position::Centre), None);
+        assert_eq!(middle, [3620, 376, 440, 640], "in the middle at its own size");
+        let room = [middle[0], middle[1], middle[0] + middle[2], middle[1] + middle[3]];
+        let (there, aside) = ([3500, 300, 4300, 1000], [4400, 100, 4900, 500]);
+        let moves = out_of_the_way(room, &[(1, there), (2, aside)], |_| work);
+        assert_eq!(moves.len(), 1, "only the window in the way moves: {moves:?}");
+        let (hwnd, from, [x, y, w, h]) = moves[0];
+        assert_eq!((hwnd, from, w, h), (1, [3500, 300, 800, 700], 800, 700));
+        for other in [room, aside] {
+            assert!(!px([x, y, x + w, y + h]).intersects(px(other)), "{x},{y} on {other:?}");
+        }
         assert!(x >= work[0] && x + w <= work[2] && y >= work[1] && y + h <= work[3], "off the monitor: {x},{y}");
-        assert_eq!(within(work, rect, Some(Position::Left), None, &[there]), [2574, 14, 1266, 1364], "the half Sir chose stays his choice");
+        // Two in the way: neither lands on the other.
+        let moves = out_of_the_way(room, &[(1, there), (3, [3600, 400, 4100, 900])], |_| work);
+        assert_eq!(moves.len(), 2);
+        let [a, b] = [moves[0].2, moves[1].2].map(|[x, y, w, h]| px([x, y, x + w, y + h]));
+        assert!(!a.intersects(b) && !a.intersects(px(room)) && !b.intersects(px(room)), "{a:?} {b:?}");
     }
 
     #[test]
@@ -517,8 +578,8 @@ mod tests {
 
     /// Sir, 2026-11-19: "i asked jai to open 3 random windows and he did but the windows are
     /// all placed on top of each other". Each had last been open alone, in the first place
-    /// beside the core, and each came up there again. Now only the first does; the others are
-    /// placed anew, off it and off each other.
+    /// beside the core, and each came up there again. Now only the first piece does; the others
+    /// come up where the board puts them, off it and off each other.
     #[test]
     fn windows_coming_up_together_never_share_a_spot() {
         let _g = crate::hud_dock::test_lock();
@@ -529,8 +590,11 @@ mod tests {
         lock(&PLACES).get_or_insert_with(Vec::new).extend(titles.map(|t| (t.to_string(), spot)));
         let came: Vec<eframe::egui::Rect> = titles
             .iter()
-            .map(|title| {
-                let builder = crate::gui::for_test_session(eframe::egui::ViewportBuilder::default().with_title(*title).with_inner_size([640.0, 480.0]));
+            .enumerate()
+            .map(|(k, title)| {
+                // (Pieces of the board: the board gives each its own place, well apart.)
+                let board_puts = [work[0] as f32 + 200.0 + 900.0 * k as f32, work[1] as f32 + 150.0];
+                let builder = crate::gui::for_test_session(eframe::egui::ViewportBuilder::default().with_title(*title).with_position(board_puts).with_inner_size([640.0, 480.0]));
                 eframe::egui::Rect::from_min_size(builder.position.expect("placed"), builder.inner_size.expect("sized"))
             })
             .collect();

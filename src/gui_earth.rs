@@ -387,6 +387,11 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     } else {
         ctx.request_repaint_after(Duration::from_secs(1));
     }
+    // (A followed aircraft gets a frame each pixel it moves: a few a second high up, smooth low.)
+    if let Some(f) = st.followed.as_ref().filter(|_| !crate::vram_guard::in_game()) {
+        let px_per_sec = f.fix.speed_kt * 1.852 / 3600.0 * geo.proj().px_per_km();
+        ctx.request_repaint_after(Duration::from_secs_f64((1.0 / px_per_sec.max(0.01)).clamp(1.0 / 60.0, 0.5)));
+    }
 }
 
 /// The sources of what is shown, the layers that are off left out.
@@ -1154,9 +1159,26 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
         }
         movers = true;
     }
+    // The followed aircraft: the way it came in the accent, the way to its airport dashed.
+    if let Some(f) = &st.followed {
+        let mut came = f.trail.clone();
+        came.push(f.now());
+        for run in proj.runs(&came) {
+            p.add(Shape::line(run, stroke(1.3, ink.accent)));
+        }
+        if let Some(to) = f.to {
+            let ahead: Vec<(f64, f64)> = (0..=64).map(|k| model::great_circle(f.now(), to, k as f64 / 64.0)).collect();
+            for run in proj.runs(&ahead) {
+                p.extend(crate::earth_layers::dashed_on(map, &run, stroke(1.0, white_ink().gamma_multiply(0.55)), 6.0, 4.0));
+            }
+        }
+    }
     if let Some(m) = &st.marker {
         if let Some((at, vis)) = proj.at(m.lat, m.lon).filter(|(at, _)| inside(*at, 14.0)) {
             reticle(p, at, white_ink().gamma_multiply(vis));
+            if let Some(f) = &st.followed {
+                plane(p, at, 5.5, f.fix.track as f32, ink.accent.gamma_multiply(vis));
+            }
             glyphs.push(Rect::from_center_size(at, Vec2::splat(28.0)));
             labels.push(Label { at, gap: 16.0, text: m.name.clone(), font: strong(11.0), colour: white_ink().gamma_multiply(vis), rank: 0.0 });
         }
@@ -2238,7 +2260,11 @@ mod tests {
         let _ = houses(&leaned, 0.0, None, None);
         let _ = houses(&leaned, 1.0, None, None);
         houses(&leaned, 1.0, None, Some(0.7)).save("panel_earth_houses_rising");
-        houses(&leaned, 1.0, None, Some(60.0)).save("panel_earth_houses_hologram");
+        let stood = houses(&leaned, 1.0, None, Some(60.0));
+        stood.save("panel_earth_houses_hologram");
+        // Leaned back, the far half falls back into the deep (it was a tangle as bright as the near).
+        let (far, near) = (Rect::from_min_size(map.min, vec2(map.width(), 120.0)), Rect::from_min_size(map.left_bottom() - vec2(0.0, 120.0), vec2(map.width(), 120.0)));
+        assert!(stood.brightness(far) < stood.brightness(near) * 0.5, "the far houses are as bright as the near ones ({} and {})", stood.brightness(far), stood.brightness(near));
         let chosen = houses(&leaned, 1.0, Some(tower_at), None);
         chosen.save("panel_earth_houses_chosen");
         let plain = houses(&leaned, 1.0, None, None);

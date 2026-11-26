@@ -118,7 +118,8 @@ impl SourceDef {
     }
 }
 
-const ROADS_511: [(&str, &str, &str, [f64; 4]); 8] = [
+/// (The last eight checked on 2026-11-26: keyless, the same map, about 6,400 cameras more.)
+const ROADS_511: [(&str, &str, &str, [f64; 4]); 16] = [
     ("www.511pa.com", "Pennsylvania", "511PA", [39.7, 42.3, -80.6, -74.6]),
     ("fl511.com", "Florida", "FL511", [24.4, 31.1, -87.7, -79.9]),
     ("az511.gov", "Arizona", "AZ511", [31.3, 37.1, -114.9, -109.0]),
@@ -127,6 +128,14 @@ const ROADS_511: [(&str, &str, &str, [f64; 4]); 8] = [
     ("511.alaska.gov", "Alaska", "Alaska 511", [51.0, 71.5, -170.0, -129.0]),
     ("www.newengland511.org", "New England", "New England 511", [42.6, 47.5, -73.5, -66.9]),
     ("ctroads.org", "Connecticut", "CTroads", [40.9, 42.1, -73.8, -71.7]),
+    ("511ga.org", "Georgia", "511GA", [30.3, 35.1, -85.7, -80.7]),
+    ("511on.ca", "Ontario", "Ontario 511", [41.6, 52.0, -95.2, -74.3]),
+    ("511.alberta.ca", "Alberta", "511 Alberta", [48.9, 60.1, -120.1, -109.9]),
+    ("www.nvroads.com", "Nevada", "NVroads", [35.0, 42.1, -120.1, -114.0]),
+    ("511.novascotia.ca", "Nova Scotia", "511 Nova Scotia", [43.4, 47.1, -66.4, -59.6]),
+    ("511.gnb.ca", "New Brunswick", "New Brunswick 511", [44.9, 48.2, -69.1, -63.7]),
+    ("511nl.ca", "Newfoundland and Labrador", "511 NL", [46.5, 60.5, -67.9, -52.5]),
+    ("511yukon.ca", "Yukon", "511 Yukon", [59.9, 69.7, -141.1, -123.7]),
 ];
 
 /// The twelve Caltrans districts, roughly.
@@ -347,6 +356,9 @@ pub fn parse_fotowebcam(v: &Value) -> Vec<Cam> {
 
 /// A 511 traveller site's camera map: positions and ids (names come with the camera's card).
 pub fn parse_511(v: &Value, host: &str, region: &str, label: &str) -> Vec<Cam> {
+    // (A camera of the list far outside its own region is a typing slip: 511GA has one in Tibet.)
+    let [s, n, w, e] = ROADS_511.iter().find(|r| r.0 == host).map_or([-90.0, 90.0, -180.0, 180.0], |r| r.3);
+    let home = |lat: f64, lon: f64| (s - 1.0..=n + 1.0).contains(&lat) && (w - 1.0..=e + 1.0).contains(&lon);
     v["item2"]
         .as_array()
         .into_iter()
@@ -355,7 +367,7 @@ pub fn parse_511(v: &Value, host: &str, region: &str, label: &str) -> Vec<Cam> {
             let id = c["itemId"].as_str().map(str::to_string).or_else(|| c["itemId"].as_i64().map(|i| i.to_string()))?;
             let loc = c["location"].as_array()?;
             let (lat, lon) = (num(loc.first()?)?, num(loc.get(1)?)?);
-            valid(lat, lon).then(|| Cam {
+            (valid(lat, lon) && home(lat, lon)).then(|| Cam {
                 id: format!("511:{host}:{id}"),
                 name: format!("{label} camera {id}"),
                 area: region.to_string(),
@@ -498,7 +510,7 @@ async fn ensure_sources(near: Option<(f64, f64, f64)>) -> Vec<String> {
 static LOADING_ALL: AtomicBool = AtomicBool::new(false);
 
 /// The stand-in index, once (tests and dry runs).
-fn ensure_demo() {
+pub(crate) fn ensure_demo() {
     let mut store = lock(&STORE);
     if store.is_none() {
         let demo = demo_store();
@@ -602,6 +614,13 @@ impl View {
 }
 
 static VIEW: LazyLock<Mutex<View>> = LazyLock::new(Default::default);
+/// Tests that open the one camera view take turns (one opened London's second camera while
+/// another drew Tower Bridge's).
+#[cfg(test)]
+pub(crate) fn view_turn() -> MutexGuard<'static, ()> {
+    static TURN: Mutex<()> = Mutex::new(());
+    lock(&TURN)
+}
 static OPEN: AtomicBool = AtomicBool::new(false);
 static VIEW_VERSION: AtomicU64 = AtomicU64::new(1);
 static EARTH_LAYER: AtomicBool = AtomicBool::new(false);
@@ -776,6 +795,27 @@ fn spoken_km(km: f64) -> String {
     crate::location_engine::spoken_distance(km * 1000.0)
 }
 
+/// "Anywhere", "somewhere", "random": no place at all, a camera at random.
+fn anywhere(place: &str) -> bool {
+    matches!(place.trim().to_lowercase().as_str(), "anywhere" | "somewhere" | "random" | "anywhere in the world" | "somewhere in the world" | "the world" | "irgendwo" | "zufällig")
+}
+
+/// Where a camera picked at random stands: a network first, each as likely as another (or the
+/// biggest would nearly always win), then one of its cameras (Sir, 2026-11-26: "JAI only ever
+/// shows the same locations").
+async fn random_place() -> Result<(f64, f64, String), String> {
+    ensure_sources(None).await;
+    let all = all_cams();
+    let mut networks: Vec<&str> = all.iter().map(|c| c.source.as_str()).collect();
+    networks.sort_unstable();
+    networks.dedup();
+    let roll = |n: usize| (uuid::Uuid::new_v4().as_u128() % n.max(1) as u128) as usize;
+    let network = *networks.get(roll(networks.len())).ok_or("I can't reach any of the public camera networks right now, Sir.")?;
+    let cams: Vec<&Cam> = all.iter().filter(|c| c.source == network).collect();
+    let cam = cams[roll(cams.len())];
+    Ok((cam.lat, cam.lon, cam.area.clone()))
+}
+
 async fn show(tools: &ToolContext, args: &Value, wall_asked: bool) -> Result<String, String> {
     let place = str_arg(args, &["place", "city", "location", "query"]).map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
     let near_me = bool_arg(args, "near_me") == Some(true) || place.as_deref().is_some_and(|p| matches!(p.to_lowercase().as_str(), "me" | "here" | "my location" | "where i am" | "mir" | "hier"));
@@ -796,9 +836,13 @@ async fn show(tools: &ToolContext, args: &Value, wall_asked: bool) -> Result<Str
         }
     } else {
         let Some(place) = place else {
-            return Err("Which place, Sir? Name a city (\"cameras in London\") or say \"the camera nearest to me\".".into());
+            return Err("Which place, Sir? Name a city (\"cameras in London\"), say \"the camera nearest to me\" or \"a random camera\".".into());
         };
-        locate(tools, &place).await?
+        if anywhere(&place) {
+            random_place().await?
+        } else {
+            locate(tools, &place).await?
+        }
     };
     open_with(|v| *v = View { label: label.clone(), cams: Vec::new(), wall: if size > 1 { size } else { 0 }, index: 0, version: 0, note: format!("Looking for live cameras near {label}…"), busy: true });
     let mut failed = ensure_sources(Some((lat, lon, NEAR_SOURCES_KM))).await;
@@ -868,6 +912,11 @@ static NEAR_ME: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(r"^(?:(?:show|open|find|give)(?: me)? )?(?:the |a )?(?:(?:nearest|closest) (?:live |public )?{CAM}(?: to me| near me)?|(?:live |public )?{CAM} (?:nearest|closest|near) (?:to )?me|(?:live |public )?{CAM} (?:around|near) here)$|^(?:zeig|zeige|finde)(?: mir)? (?:die |eine )?(?:webcams?|kameras?) in meiner n(?:ä|ae)he$")
     )
 });
+/// "Show me a random live camera", "a camera from anywhere in the world", "zeig mir eine
+/// zufällige Kamera": one picked at random (`random_place`).
+static ANYWHERE: LazyLock<Regex> = LazyLock::new(|| {
+    re(&format!(r"^(?:(?:show|open|give|find|pick)(?: me)? )?(?:a |an |some )?(?:random|any) (?:live |public )?{CAM}(?: (?:from )?(?:anywhere|somewhere)(?: in the world| on earth)?)?$|^(?:(?:show|open|give|find)(?: me)? )?(?:a |an )?(?:live |public )?{CAM} (?:from )?(?:anywhere|somewhere)(?: in the world| on earth)?$|^(?:zeig|zeige)(?: mir)? (?:eine )?(?:zufällige|zufaellige|irgendeine) (?:live ?)?(?:kamera|webcam)$"))
+});
 static NEXT_DE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:zeig|zeige)(?: mir)? die n(?:ä|ae)chste (?:webcam|kamera)$"));
 static NEXT: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:show (?:me )?)?(?:the )?(?:next|another|other) (?:live )?(?:camera|webcam|cam)$|^n(?:ä|ae)chste (?:kamera|webcam)$"));
 static PLACE: LazyLock<Regex> = LazyLock::new(|| {
@@ -900,6 +949,9 @@ pub fn phrase(s: &str) -> Option<Value> {
     }
     if NEXT.is_match(s) {
         return is_open().then(|| json!({"action": "next"}));
+    }
+    if ANYWHERE.is_match(s) {
+        return Some(json!({"place": "anywhere"}));
     }
     let c = PLACE.captures(s)?;
     let noun = c.name("noun").or_else(|| c.name("noun2"))?.as_str();
@@ -950,6 +1002,11 @@ mod tests {
         for text in ["show my camera", "turn on the camera", "show the camera on my second monitor", "open the camera app", "show me a picture of a camera"] {
             assert_eq!(said(text), None, "{text}");
         }
+        // Sir, 2026-11-26: "JAI only ever shows the same locations": one at random.
+        for text in ["Show me a random live camera", "show me a camera from anywhere in the world", "Show me any webcam", "Zeig mir eine zufällige Kamera"] {
+            assert_eq!(said(text), Some(json!({"place": "anywhere"})), "{text}");
+        }
+        assert!(anywhere("Anywhere") && anywhere("somewhere in the world") && !anywhere("London"));
     }
 
     #[test]
@@ -982,6 +1039,9 @@ mod tests {
         let ct511 = json!({"item1": {}, "item2": [{"itemId": "308", "location": [41.823175, -72.501513]}]});
         let cams = parse_511(&ct511, "ctroads.org", "Connecticut", "CTroads");
         assert_eq!((cams[0].image.as_str(), cams[0].id.as_str()), ("https://ctroads.org/map/Cctv/308", "511:ctroads.org:308"));
+        // (511GA's own list as it was on 2026-11-26: one camera with its longitude's sign lost.)
+        let ga = json!({"item2": [{"itemId": "11141", "location": [34.37697, -84.91445]}, {"itemId": "9", "location": [33.7, 84.3]}]});
+        assert_eq!(parse_511(&ga, "511ga.org", "Georgia", "511GA").iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["511:511ga.org:11141"]);
         let card = r#"<img class="carouselCctvImage" data-lazy="/map/Cctv/308" data-fs-title="CAM 1 Vernon I-84 WB Exit 64 - Rt. 30 &amp; 83" />"#;
         assert_eq!(parse_511_card(card).as_deref(), Some("CAM 1 Vernon I-84 WB Exit 64 - Rt. 30 & 83"));
     }
@@ -999,6 +1059,7 @@ mod tests {
 
     #[test]
     fn the_viewer_runs_offline_on_stand_ins() {
+        let _turn = view_turn();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let _ = ensure_sources(None).await;

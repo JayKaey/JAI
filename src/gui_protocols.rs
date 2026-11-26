@@ -66,6 +66,8 @@ struct Form {
     /// What is typed for the start being added, and for a step.
     typed: String,
     step: String,
+    /// The step being changed (EDIT): what is typed takes its place.
+    editing: Option<usize>,
     /// What the last key came to, and whether that is a fault.
     said: (String, bool),
 }
@@ -85,7 +87,13 @@ struct Desk<'a> {
     acoustic: &'a dyn Fn(Option<AcousticSettings>) -> AcousticSettings,
 }
 
-pub(super) fn open() {
+/// The protocol he asked to see, put on the form as the window next draws.
+static WANTED: Mutex<Option<String>> = Mutex::new(None);
+
+pub(super) fn open(at: Option<&str>) {
+    if let Some(name) = at {
+        *WANTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(name.to_string());
+    }
     OPEN.store(true, Ordering::Release);
 }
 
@@ -137,9 +145,17 @@ impl Form {
         Ok(())
     }
 
-    /// A step after the others, in his words.
+    /// A step after the others, in his words, or in place of the one being changed (left as it
+    /// was when its words are).
     fn add_step(&mut self, words: &str) {
-        self.steps.extend(Step::of_line(words));
+        match (self.editing.take(), Step::of_line(words)) {
+            (Some(i), Some(step)) if i < self.steps.len() => {
+                if self.steps[i].words() != words.trim() {
+                    self.steps[i] = step;
+                }
+            }
+            (_, step) => self.steps.extend(step),
+        }
         self.step.clear();
     }
 }
@@ -439,6 +455,7 @@ fn then_i_do(ui: &mut Ui, f: &mut Form) {
     let t = holo::theme();
     let last = f.steps.len();
     let mut moved: Option<(usize, i32)> = None;
+    let mut edit: Option<usize> = None;
     for (i, step) in f.steps.iter().enumerate() {
         let words = if kit_notes::is_tell_me(&step.words()) { "Tell me what happened".to_string() } else { step.words() };
         ui.horizontal(|ui| {
@@ -446,6 +463,9 @@ fn then_i_do(ui: &mut Ui, f: &mut Form) {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if holo_ui::key(ui, "X").clicked() {
                     moved = Some((i, 0));
+                }
+                if holo_ui::key_on(ui, "EDIT", f.editing == Some(i)).clicked() {
+                    edit = Some(i);
                 }
                 // (A key a step has no use for leaves its room, so the keys stand in columns.)
                 for (shown, label, by) in [(i + 1 < last, "DOWN", 1), (i > 0, "UP", -1)] {
@@ -459,10 +479,18 @@ fn then_i_do(ui: &mut Ui, f: &mut Form) {
             });
         });
     }
+    // (Its words go into the line below, to be changed there; a step moved or taken out ends it.)
+    if let Some(i) = edit {
+        f.step = f.steps[i].words();
+        f.editing = Some(i);
+    }
     match moved {
         Some((i, 0)) => drop(f.steps.remove(i)),
         Some((i, by)) => f.steps.swap(i, (i as i32 + by) as usize),
         None => {}
+    }
+    if moved.is_some() {
+        f.editing = None;
     }
     if f.steps.is_empty() {
         text(ui, "No steps yet: add what I should do, one at a time.", Face::Body, 12.0, t.faint());
@@ -470,7 +498,7 @@ fn then_i_do(ui: &mut Ui, f: &mut Form) {
     ui.horizontal(|ui| {
         let typed = holo_ui::slot(ui, egui::TextEdit::singleline(&mut f.step).hint_text("open Spotify").desired_width(240.0));
         let entered = typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if (holo_ui::key(ui, "ADD STEP").clicked() || entered) && !f.step.trim().is_empty() {
+        if (holo_ui::key(ui, if f.editing.is_some() { "CHANGE" } else { "ADD STEP" }).clicked() || entered) && !f.step.trim().is_empty() {
             let typed = std::mem::take(&mut f.step);
             f.add_step(&typed);
         }
@@ -598,6 +626,14 @@ fn reaction(ui: &mut Ui, f: &Form, desk: &Desk, rules: &[(String, When, String)]
 fn body(ui: &mut Ui, desk: &Desk) {
     crate::sound_sense::watch();
     let mut f = form();
+    // ("Edit the gaming protocol"; one he has not got yet comes up new, by that name.)
+    if let Some(name) = WANTED.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let found = desk.store.get(&name);
+        f.load(found.as_ref());
+        if found.is_none() {
+            f.name = name;
+        }
+    }
     let (rules, all) = (kit_notes::rules(), desk.store.list());
     how_it_works(ui);
     ui.add_space(2.0);

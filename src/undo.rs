@@ -201,10 +201,9 @@ pub fn way_back(tool: &str, args: &Value, said: &str, before: &Snapshot, after: 
                 step.done = "that reminder is cancelled";
             }
         }
-        // How he listens: back to the other of the two modes.
+        // How he listens: back to the mode before.
         ("set_listening_mode", _) => {
-            let was = if said.contains("WAKE-WORD") { Some("hands_free") } else if said.contains("HANDS-FREE") { Some("wake_word") } else { None };
-            if let Some(mode) = was {
+            if let Some(mode) = said.split("[was: ").nth(1).and_then(|rest| rest.split(']').next()) {
                 step.calls.push(("set_listening_mode", json!({ "mode": mode })));
                 step.done = "I listen as I did before";
             }

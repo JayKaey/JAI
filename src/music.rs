@@ -1300,7 +1300,14 @@ impl MusicEngine {
         if members.is_empty() {
             return Err(format!("I know the playlist '{}', but its track list isn't on this PC — download it in Sonora and I can play straight from it.", list.name));
         }
-        let (index, track) = playlist_position(&members, song, artist).map(|(i, t)| (i, t.clone())).ok_or_else(|| format!("I couldn't find '{song}' inside playlist '{}'.", list.name))?;
+        // ("A random song from my Focus playlist": any of its songs, not its first.)
+        let found = if song.split_whitespace().any(|w| matches!(w, "random" | "any" | "zufälliges" | "irgendein" | "irgendeinen")) {
+            let i = (uuid::Uuid::new_v4().as_u128() % members.len() as u128) as usize;
+            Some((i, &members[i]))
+        } else {
+            playlist_position(&members, song, artist)
+        };
+        let (index, track) = found.map(|(i, t)| (i, t.clone())).ok_or_else(|| format!("I couldn't find '{song}' inside playlist '{}'.", list.name))?;
         info!("[MUSIC] '{song}' is #{} of {} in '{}' → {}", index + 1, members.len(), list.name, track.uri);
         let result = if track.kind == ItemKind::LocalFile {
             // A queue from the entry on, in playlist order.

@@ -312,10 +312,15 @@ pub fn sink(hwnd: isize) {
     }
 }
 
-/// Brings window `hwnd` above every other program's window without giving it the focus.
+/// Brings window `hwnd` above every other program's window without giving it the focus. One
+/// kept on top is left as it is: made topmost and back, it would no longer be.
 pub fn raise(hwnd: isize) {
-    // SAFETY: z-order changes on a window handle; a stale one just fails.
+    use windows::Win32::UI::WindowsAndMessaging::WS_EX_TOPMOST;
+    // SAFETY: a query and z-order changes on a window handle; a stale one just fails.
     unsafe {
+        if GetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE) & WS_EX_TOPMOST.0 as isize != 0 {
+            return;
+        }
         let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
         let _ = SetWindowPos(HWND(hwnd), HWND_TOPMOST, 0, 0, 0, 0, flags);
         let _ = SetWindowPos(HWND(hwnd), HWND_NOTOPMOST, 0, 0, 0, 0, flags);

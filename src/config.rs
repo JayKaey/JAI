@@ -219,6 +219,10 @@ pub struct JaiConfig {
     /// open conversation, his window in front, a direct command or question), while gamer
     /// chatter over a game or Discord is ignored even in hands-free mode.
     pub addressee_detection: bool,
+    /// With the wake word required: only a sentence with his name in it is his ("only answer
+    /// when I say your name", Sir, 2026-11-26), not an open conversation, his window in front or
+    /// a plain order alone.
+    pub name_only: bool,
 
     // ---- Models -------------------------------------------------------------------------
     pub auto_download_models: bool,
@@ -586,11 +590,13 @@ pub struct AcousticSettings {
     pub knock_only_with_music: bool,
     /// 0.5 (fewer false alarms) … 2.0 (quieter claps and knocks count).
     pub sensitivity: f32,
+    /// "Bless you, Sir." when he sneezes (Sir, 2026-11-26).
+    pub bless_sneezes: bool,
 }
 
 impl Default for AcousticSettings {
     fn default() -> Self {
-        Self { double_clap: true, clap_action: "wake".into(), knock_alert: true, knock_only_with_music: true, sensitivity: 1.0 }
+        Self { double_clap: true, clap_action: "wake".into(), knock_alert: true, knock_only_with_music: true, sensitivity: 1.0, bless_sneezes: true }
     }
 }
 
@@ -663,6 +669,7 @@ impl Default for JaiConfig {
             wake_word_similarity_threshold: 0.80,
             wake_word_required: true,
             addressee_detection: true,
+            name_only: false,
 
             auto_download_models: true,
             silero_vad_model_path: env("SILERO_VAD_MODEL", "models/silero_vad.onnx"),

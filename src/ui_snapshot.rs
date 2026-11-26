@@ -413,5 +413,17 @@ mod tests {
         canvas.save("core_sphere");
         let middle = Rect::from_center_size(area.center(), vec2(300.0, 300.0));
         assert!(canvas.brightness(middle) > 8.0, "the sphere is drawn: {}", canvas.brightness(middle));
+        // Its other versions: his files (turned well over the top, as a hand may leave it) and his rings.
+        for kind in [crate::holo_mind::CoreKind::Files, crate::holo_mind::CoreKind::Rings] {
+            sphere.apply(crate::holo_mind::CoreCommand::Kind(kind));
+            sphere.drag(vec2(40.0, -260.0), 1.0 / 60.0);
+            let mut snap = Snapshot::new(vec2(W, H));
+            let canvas = snap.render(12, |ctx| {
+                crate::gui::paint_canvas(ctx);
+                egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| sphere.show(ui, area, &crate::holo_core::CoreLook { voice: 0.5, clock: 6.0, layers: [0.9, 0.7, 0.2, 0.1], ..Default::default() }, &crate::mind_activity::LAYERS, &crate::mind_activity::recent(std::time::Instant::now())));
+            });
+            canvas.save(&format!("core_{}", kind.name()));
+            assert!(canvas.brightness(middle) > 4.0, "the core's {} are drawn: {}", kind.name(), canvas.brightness(middle));
+        }
     }
 }
