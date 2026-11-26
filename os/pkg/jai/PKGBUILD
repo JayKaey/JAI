@@ -37,7 +37,7 @@ optdepends=(
   'yt-dlp: downloads from video sites'
   'ollama-cuda: the language model on an NVIDIA card (the installer picks it)'
   'ollama-rocm: the language model on an AMD card (the installer picks it)'
-  'ollama-vulkan: the language model on any card with Vulkan'
+  'ollama-vulkan: the language model on any other card (the installer picks it)'
   'nvidia-utils: nvidia-smi tells him the video memory'
   'cups: "print it twice"'
 )

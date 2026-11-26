@@ -421,6 +421,14 @@ impl Way {
             };
             wording = wording.replace(&format!("{{{name}}}"), &value);
         }
+        // ("What's the weather like in Berlin" names nothing of his to explain: such a wording
+        // only cost every question for the model another pass of the fast path, 0.6 ms.)
+        if self.canon == "explain {text}" {
+            let s = wording.to_lowercase();
+            if crate::changes::command(&s).is_none() && crate::intents::explained(&s).is_none() {
+                return None;
+            }
+        }
         // (A wording that still waits for something the sentence did not give is none.)
         (!wording.contains('{')).then_some(wording)
     }

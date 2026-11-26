@@ -370,6 +370,9 @@ pub struct Machine {
     pub level: Level,
     pub secure_boot: SecureBoot,
     pub vram_mb: Option<u64>,
+    /// The graphics card's maker ("nvidia", "amd", "intel"; the strongest of several): Arch's
+    /// ollama alone runs on the processor, its add-on for the card puts the brain on it.
+    pub card: Option<&'static str>,
     pub ids: Ids,
 }
 
@@ -696,6 +699,7 @@ pub fn plan(disks: &[Disk], c: &Choices, m: &Machine) -> Result<Plan, Said> {
             inside(&["passwd", "--lock", "root"]),
             Action::Write { path: format!("{ROOT}/etc/sudoers.d/10-wheel"), text: "%wheel ALL=(ALL:ALL) ALL\n".into(), mode: 0o440 },
             inside(&["chwd", "-a"]).soft(),
+            inside(&["pacman", "-S", "--noconfirm", "--needed", match m.card { Some("nvidia") => "ollama-cuda", Some("amd") => "ollama-rocm", _ => "ollama-vulkan" }]).soft(),
         ],
     );
 
@@ -811,7 +815,7 @@ mod tests {
     }
 
     fn machine() -> Machine {
-        Machine { uefi: true, level: Level::V3, secure_boot: SecureBoot::Setup, vram_mb: Some(12 * 1024), ids: ids() }
+        Machine { uefi: true, level: Level::V3, secure_boot: SecureBoot::Setup, vram_mb: Some(12 * 1024), card: Some("nvidia"), ids: ids() }
     }
 
     fn choices(target: Target) -> Choices {
@@ -993,6 +997,10 @@ mod tests {
         // The new system and the installation read the same configuration.
         let plan = plan(&disks(SAMPLE), &choices(free()), &machine()).unwrap();
         assert_eq!(plan.file("/run/jaios-install/pacman.conf"), plan.file("/mnt/etc/pacman.conf"));
+        // The brain's add-on for the card, after its driver.
+        let addon = |card| super::plan(&disks(SAMPLE), &choices(free()), &Machine { card, ..machine() }).unwrap().shown().into_iter().find(|l| l.contains("--needed ollama")).unwrap();
+        assert_eq!(addon(Some("nvidia")), format!("arch-chroot {ROOT} pacman -S --noconfirm --needed ollama-cuda"));
+        assert!(addon(Some("amd")).ends_with(" ollama-rocm") && addon(Some("intel")).ends_with(" ollama-vulkan") && addon(None).ends_with(" ollama-vulkan"));
         // The list: one name a line, each once, what the owner asked for among them.
         let packages = packages();
         // (Ollama, Tesseract and yt-dlp too: J.A.I.'s package leaves them optional for the stick.)

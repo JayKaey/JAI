@@ -2298,8 +2298,9 @@ mod tests {
         eprintln!("[probe] the houses of a dense city: median {median:.1} ms, worst {worst:.1} ms a frame, {vertices} vertices");
         // (13.8 ms and 296 564 vertices before 2026-11-20: every point's sines and the view's
         // Mercator middle were worked out again for each of a hundred thousand points; 8.4 ms and
-        // 158 968 vertices after, with 5 000 houses drawn.)
-        assert!(median < 8.0, "a frame of the houses: median {median:.1} ms, worst {worst:.1} ms, {vertices} vertices");
+        // 158 968 vertices after, with 5 000 houses drawn. On 2026-11-26 5.9 ms alone, 9.4 ms
+        // beside the whole suite: the bound lies between that and the old 13.8.)
+        assert!(median < 12.0, "a frame of the houses: median {median:.1} ms, worst {worst:.1} ms, {vertices} vertices");
     }
 
     /// Down at the closest the camera comes (Sir, 2026-11-20: "zoom into the earth way more"),

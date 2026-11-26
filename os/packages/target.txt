@@ -73,13 +73,15 @@ discover
 flatpak
 paru
 
-# J.A.I. himself, and the tools he uses that his package leaves optional (so that the install
-# stick, which only shows the installer, stays under 2 GiB)
-jai
-jaios-settings
-jaios
+# The tools J.A.I. uses that his package leaves optional (so that the install stick, which only
+# shows the installer, stays under 2 GiB)
 ollama
 tesseract
 tesseract-data-eng
 tesseract-data-deu
 yt-dlp
+
+# J.A.I. himself
+jai
+jaios-settings
+jaios

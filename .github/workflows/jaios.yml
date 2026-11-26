@@ -194,13 +194,21 @@ jobs:
         shell: bash
         run: |
           cp /usr/share/edk2/x64/OVMF_VARS.4m.fd vars.fd
-          accel=tcg; if [ -w /dev/kvm ]; then accel=kvm; fi
-          qemu-system-x86_64 -machine "q35,accel=$accel" -cpu max -smp 4 -m 6144 \
-            -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd -drive if=pflash,format=raw,file=vars.fd \
-            -cdrom "$ISO" -vga none -device virtio-vga -display none -nic user,model=virtio-net-pci \
-            -serial file:serial.log -monitor unix:monitor.sock,server,nowait -daemonize -pidfile qemu.pid
+          # (QEMU's own complaints go to qemu.txt, and into the error below.)
+          start() {
+            qemu-system-x86_64 -machine "q35,accel=$1" -cpu max -smp 4 -m 6144 \
+              -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd -drive if=pflash,format=raw,file=vars.fd \
+              -cdrom "$ISO" -vga none -device virtio-vga -display none -nic user,model=virtio-net-pci \
+              -serial file:serial.log -monitor unix:monitor.sock,server=on,wait=off -daemonize -pidfile qemu.pid 2>> qemu.txt
+          }
+          # KVM where the runner lends it; else QEMU's own emulation, slower, so waited for longer.
+          accel=kvm; tries=240
+          if ! { [ -w /dev/kvm ] && start kvm; }; then
+            accel=tcg; tries=720
+            start tcg || { echo "::error title=QEMU::$(sed "$ONE_LINE" qemu.txt)"; exit 1; }
+          fi
           ready=1
-          for _ in $(seq 1 240); do
+          for _ in $(seq 1 "$tries"); do
             if grep -q -a JAIOS-INSTALLER-READY serial.log 2> /dev/null; then ready=0; break; fi
             kill -0 "$(cat qemu.pid)" 2> /dev/null || break
             sleep 5
@@ -210,7 +218,7 @@ jobs:
           echo "screendump screen.png -f png" | socat - UNIX-CONNECT:monitor.sock > /dev/null || true
           sleep 2
           echo quit | socat - UNIX-CONNECT:monitor.sock > /dev/null || true
-          log="$(tr -cd '\11\12\40-\176' < serial.log | tail -c 3000 | sed "$ONE_LINE")"
+          log="$(cat qemu.txt serial.log 2> /dev/null | tr -cd '\11\12\40-\176' | tail -c 3000 | sed "$ONE_LINE")" || true
           if [ "$ready" = 0 ]; then
             echo "::notice title=Install stick ($accel)::The installer's window came up.%0A$log"
           else
@@ -224,6 +232,7 @@ jobs:
           path: |
             serial.log
             screen.png
+            qemu.txt
             iso.txt
           retention-days: 30
 

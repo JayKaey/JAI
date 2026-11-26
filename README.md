@@ -557,7 +557,9 @@ disk's name), or *replace a partition*. Windows' partitions, its EFI partition a
 never taken. A summary lists every change before anything is touched. J.A.I.OS gets its own
 4 GiB boot partition and a btrfs root (@, @home, @root, @srv, @cache, @tmp, @log), encrypted with
 LUKS2 if you switch that on. Packages come from CachyOS's repositories for your processor
-(x86-64-v3, v4, znver4), Arch's and `[jaios]`; the list is `os/packages/target.txt`. Limine
+(x86-64-v3, v4, znver4), Arch's and `[jaios]`; the list is `os/packages/target.txt`. `chwd`
+installs the graphics driver, and the language model gets Ollama's add-on for the card
+(`ollama-cuda` for NVIDIA, `ollama-rocm` for AMD, `ollama-vulkan` for any other). Limine
 starts what was started last after 3 seconds and has an entry for Windows. Secure Boot: with the
 firmware in Setup Mode J.A.I. enrolls his own keys next to Microsoft's; otherwise he tells you at
 the first start how to finish. With Secure Boot on and the maker's keys, J.A.I.OS does not start

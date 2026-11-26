@@ -48,6 +48,17 @@ jobs:
           echo "::notice title=Linux tests::$(grep '^test result' tests.txt)"
           awk "$FAILURES" tests.txt
           exit $code
+      # Every other test too, on Linux: told as warnings, not yet required (some read a Windows PC).
+      - name: The whole suite
+        shell: bash
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          code=0
+          cargo test --release -- --test-threads=4 2>&1 | tee all.txt || code=$?
+          echo "::notice title=Whole suite on Linux::$(grep '^test result' all.txt)"
+          awk "$FAILURES" all.txt | sed 's/^::error::/::warning::/'
+          exit $code
       - uses: actions/upload-artifact@v7
         with:
           name: jai-linux-x86_64

@@ -61,8 +61,18 @@ pub fn look() -> Found {
     // (efivarfs: four bytes of attributes, then the value.)
     let firmware = |name: &str| std::fs::read(format!("/sys/firmware/efi/efivars/{name}-8be4df61-93ca-11d2-aa0d-00e098032b8c")).ok().and_then(|b| b.get(4).copied());
     let secure_boot = if real { SecureBoot::of(firmware("SetupMode"), firmware("SecureBoot")) } else { SecureBoot::of(Some(1), Some(0)) };
-    let machine = Machine { uefi: !real || Path::new("/sys/firmware/efi").exists(), level: Level::of_this_pc(&cpuinfo), secure_boot, vram_mb: crate::installer::vram_mb(), ids: Ids::fresh() };
+    let machine = Machine { uefi: !real || Path::new("/sys/firmware/efi").exists(), level: Level::of_this_pc(&cpuinfo), secure_boot, vram_mb: crate::installer::vram_mb(), card: card(), ids: Ids::fresh() };
     Found { disks, machine, zones: os_install::zones(&zones), layouts: os_install::layouts(&layouts), real }
+}
+
+/// The graphics card's maker, from the PCI bus' display controllers (class 03): NVIDIA before
+/// AMD before Intel, for a laptop's two. (None off Linux.)
+fn card() -> Option<&'static str> {
+    let makers: Vec<String> = std::fs::read_dir("/sys/bus/pci/devices").into_iter().flatten().flatten().filter_map(|d| {
+        let read = |f: &str| std::fs::read_to_string(d.path().join(f)).unwrap_or_default().trim().to_string();
+        read("class").starts_with("0x03").then(|| read("vendor"))
+    }).collect();
+    [("0x10de", "nvidia"), ("0x1002", "amd"), ("0x8086", "intel")].into_iter().find(|(id, _)| makers.iter().any(|m| m == id)).map(|(_, maker)| maker)
 }
 
 /// The live session's keyboard takes the layout at once, so the test field and the passwords

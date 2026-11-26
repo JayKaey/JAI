@@ -1489,7 +1489,7 @@ pub fn hud_view_command(text: &str) -> Option<Intent> {
     hud_view_sentence(text)
 }
 
-/// "Bring back my windows", "reopen the windows from last time", "restore my last session",
+/// "Bring back my windows", "reopen the windows from last time", "restore my session",
 /// "open everything I had open again", "hol meine Fenster von vorhin zurück": what was open
 /// last comes back, also after a restart. ("Bring all the windows back in" docks them.)
 static WINDOWS_BACK: LazyLock<Regex> = LazyLock::new(|| {
@@ -3165,7 +3165,7 @@ fn did_you_about(s: &str) -> Option<String> {
 
 /// "What is orb mode?", "what does the mixer do?", "was ist der Orbmodus?": his own modes and
 /// views, told as they are (2026-11-07: the model made up "a translucent overlay").
-fn explained(s: &str) -> Option<String> {
+pub(crate) fn explained(s: &str) -> Option<String> {
     static WHAT_IS: LazyLock<Regex> = LazyLock::new(|| {
         re(r"^(?:what\s+is|whats|what\s+does|what\s+do\s+you\s+mean\s+by|explain|tell\s+me\s+about|was\s+ist|was\s+macht|erklär\s+mir|erkläre\s+mir|erklaer\s+mir|erklaere\s+mir)\s+(?:the\s+|your\s+|a\s+|der\s+|die\s+|das\s+|dein\s+|deine\s+|den\s+)?(.+?)(?:\s+(?:do|for|good\s+for))?$")
     });
@@ -7671,7 +7671,6 @@ mod tests {
             "Bring my windows back",
             "JAI, bring back up all recently opened windows.",
             "Reopen my windows",
-            "Restore my last session",
             "Reopen the windows from last time",
             "Open everything I had open again",
             "Bring back the widgets",
@@ -7680,6 +7679,8 @@ mod tests {
         ] {
             assert_eq!(parse(text), back, "{text}");
         }
+        // (His whole last session, programs too, is "where was I", since 2026-11-22.)
+        assert_eq!(parse("Restore my last session"), Some(Intent::Tool { name: "where_was_i", args: json!({}) }));
         let keep = |id: &str, on: bool| Some(Intent::Tool { name: "create_or_update_widget", args: json!({"id": id, "keep_at_start": on}) });
         for (text, id, on) in [
             ("Open that widget again the next time I start you", "last", true),
@@ -8310,7 +8311,9 @@ mod tests {
         assert_eq!(tool("Make the interfaces opacity 0% please."), Some(("configure_interface", json!({"opacity": 0}))));
         let done = crate::interface::configure(&crate::interface::InterfaceSettings::default(), &json!({"opacity": 0})).unwrap();
         let said = crate::interface::spoken_ack(&json!({"opacity": 0}), &done.settings);
-        assert!(said.contains("15 percent") && said.contains("lowest it goes"), "{said}");
+        // (On Windows the black is seen through whole or not at all: no percent to tell.)
+        let floor = said.contains("15 percent") && said.contains("lowest it goes");
+        assert!(if cfg!(windows) { said.contains("wallpaper shows through") } else { floor }, "{said}");
         // Closing himself, in German and as the recogniser heard it.
         for text in ["kannst du dich selbst schließen?", "Stopp, gliese dich selbst.", "kannte ich selbst schließen, bitte?"] {
             assert_eq!(tool(text), Some(("shutdown_jai", json!({}))), "{text}");

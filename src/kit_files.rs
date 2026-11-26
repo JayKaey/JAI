@@ -107,7 +107,8 @@ pub fn command(s: &str, original: &str) -> Option<Value> {
         };
         return Some(json!({"action": "free_space", "what": what, "confirmed": true}));
     }
-    if let Some(c) = FREE.captures(s) {
+    // (Bare "mach Platz" is "make way": the core steps aside.)
+    if let Some(c) = FREE.captures(s).filter(|_| !matches!(s, "mach platz" | "mache platz" | "schaff platz" | "schaffe platz")) {
         let what = if c.name("bin").or(c.name("bin2")).is_some() { "bin" } else if c.name("temp").or(c.name("temp2")).is_some() { "temp" } else { "both" };
         return Some(json!({"action": "free_space", "what": what}));
     }
@@ -903,11 +904,12 @@ mod tests {
         assert_eq!(order("empty the recycle bin"), json!({"action": "free_space", "what": "bin"}));
         assert_eq!(order("clear my temp files"), json!({"action": "free_space", "what": "temp"}));
         assert_eq!(order("Leere den Papierkorb"), json!({"action": "free_space", "what": "bin"}));
+        assert_eq!(order("Mach etwas Platz frei"), json!({"action": "free_space", "what": "both"}));
         // His yes to the offer: the order it holds, confirmed.
         assert_eq!(order("empty the temp files and the recycle bin for good"), json!({"action": "free_space", "what": "both", "confirmed": true}));
         assert!(only_looks(&order("what did I work on yesterday")) && only_looks(&order("free up some space")));
         assert!(!only_looks(&order("open the file I had open today")) && !only_looks(&order("empty the recycle bin for good")));
-        for other in ["make it smaller", "make this window smaller", "print screen", "show the QR code", "what was I working on", "where was I", "rename the protocol to morning", "open the file I had open with Max", "how can I free up some space", "copy that"] {
+        for other in ["make it smaller", "make this window smaller", "print screen", "show the QR code", "what was I working on", "where was I", "rename the protocol to morning", "open the file I had open with Max", "how can I free up some space", "copy that", "Mach Platz"] {
             let s = crate::intents::normalize_phrase(other);
             assert_eq!(command(&s, other), None, "{other}");
         }

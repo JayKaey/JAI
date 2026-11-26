@@ -124,7 +124,9 @@ pub const RELEASES: &[Release] = &[
             better("Live cameras in more places", "Eight more networks: Georgia, Nevada, Ontario, Alberta, Atlantic Canada and Yukon."),
             fixed("3D houses seen from a low angle", "Houses behind the middle fall back into the deep, not a tangle; far roofs carry no label."),
             fixed("The J.A.I.OS stick under 2 GiB", "His heavy tools are left off the install stick, which only shows the installer."),
+            fixed("J.A.I.OS's brain on the graphics card", "The installer adds Ollama's part for the card: CUDA on NVIDIA, ROCm on AMD, else Vulkan."),
             new("Wi-Fi, Bluetooth, power plan, dark or light", "\"Wi-Fi off\", \"airplane mode on\", \"high performance mode\", \"switch Windows to dark mode\".", "pc_switches"),
+            fixed("\"Mach Platz\" moves him aside", "Said alone, it moves his core out of the way again; \"mach Platz frei\" still frees disk space."),
         ],
     },
     Release {
