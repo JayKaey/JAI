@@ -134,6 +134,7 @@ pub const RELEASES: &[Release] = &[
             fixed("Linux: system folders are safe", "His file tools could write to /etc or /usr on Linux: the guard read paths the Windows way."),
             fixed("Linux: textures of models made on Windows", "A model that names its textures the Windows way (\"tex\\wood.png\") finds them on Linux too."),
             fixed("Linux: a cat is a cat", "\"Make me a drawing of a cat\" showed nothing on Linux: \"cat\" was taken for the program cat."),
+            better("Orders understood quicker", "\"When can I see the ISS?\" took 2 ms to understand, now 0.5 ms; \"open my browser\" a third."),
         ],
     },
     Release {

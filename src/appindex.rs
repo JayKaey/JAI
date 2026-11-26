@@ -80,17 +80,26 @@ pub fn rebuild() {
     crate::pronunciation_lexicon::learn_titles(names().into_iter().chain(crate::kit_games::library().into_iter().map(|g| g.name)));
 }
 
-fn score(query: &str, key: &str) -> f64 {
+/// How alike two names are; 0 where their lengths alone keep them under `floor`: both measures
+/// are capped by r = shorter / longer (Jaro-Winkler at 0.8 + 0.2·r, Levenshtein at r). A
+/// sentence scored in full against every app here took 1 ms (`is_known`, 247 apps).
+fn score(query: &str, key: &str, floor: f64) -> f64 {
     if key == query {
         return 1.0;
     }
-    let compact = |s: &str| s.replace([' ', '-', '.'], "");
-    if compact(key) == compact(query) {
+    fn compact(s: &str) -> impl Iterator<Item = char> + '_ {
+        s.chars().filter(|c| !matches!(c, ' ' | '-' | '.'))
+    }
+    if compact(key).eq(compact(query)) {
         return 0.99;
     }
     // "obs" → "obs studio", "code" → "visual studio code" (whole words only).
-    if key.split_whitespace().any(|w| w == query) || key.starts_with(&format!("{query} ")) {
+    if key.split_whitespace().any(|w| w == query) || key.strip_prefix(query).is_some_and(|rest| rest.starts_with(' ')) {
         return 0.93;
+    }
+    let (q, k) = (query.chars().count() as f64, key.chars().count() as f64);
+    if 0.8 + 0.2 * q.min(k) / q.max(k) < floor {
+        return 0.0;
     }
     jaro_winkler(query, key).max(normalized_levenshtein(query, key))
 }
@@ -98,7 +107,7 @@ fn score(query: &str, key: &str) -> f64 {
 fn best<'a>(entries: impl IntoIterator<Item = &'a AppEntry>, query: &str, threshold: f64) -> Option<(f64, AppEntry)> {
     let mut best: Option<(f64, &AppEntry)> = None;
     for e in entries {
-        let s = e.keys.iter().map(|k| score(query, k)).fold(0.0, f64::max);
+        let s = e.keys.iter().map(|k| score(query, k, threshold)).fold(0.0, f64::max);
         // Prefer shortcuts and App Paths over raw executables at equal scores.
         let s = s - if matches!(e.kind, EntryKind::Program | EntryKind::PathBin) { 0.005 } else { 0.0 };
         if s >= threshold && best.is_none_or(|(b, _)| s > b) {
@@ -432,6 +441,33 @@ mod tests {
         // A program on Linux's PATH is no app name of his: "cat" stays a cat.
         let linux = [e("cat", EntryKind::PathBin, None), e("Firefox", EntryKind::Desktop, None)];
         assert!(!known_in(&linux, "cat") && known_in(&linux, "firefox") && known_in(&entries, "visual studio code"));
+    }
+
+    /// Repro 2026-11-26 (`--exhaustive`, matrix A): "When can I see the ISS?" took 1.97 ms to
+    /// route, most of it two `is_known` calls that scored the words in full against every app
+    /// of this PC (247). A pair whose lengths cannot reach the floor is skipped; nothing else changes.
+    #[test]
+    fn a_name_far_longer_than_any_app_is_not_scored_against_them_all() {
+        let names = ["Steam", "Spotify", "Visual Studio Code", "obs64", "Blender 4.2", "Discord", "Firefox", "7-Zip File Manager", "Microsoft Edge", "Notepad++"];
+        for q in ["steam", "spotfy", "code", "blender", "firefox", "7zip", "the iss", "see the iss", "when can i see the iss", "visual studio cod", "microsoft edge browser"] {
+            for k in names.map(normalize) {
+                let full = score(q, &k, 0.0);
+                for floor in [NEAREST_SCORE, MIN_SCORE, 0.97] {
+                    let fast = score(q, &k, floor);
+                    assert!(if full >= floor { fast == full } else { fast < floor }, "{q} / {k} at {floor}: {fast} against {full}");
+                }
+            }
+        }
+        let entries: Vec<AppEntry> = (0..250).map(|i| e(&format!("{} {i}", names[i % names.len()]), EntryKind::Shortcut, None)).collect();
+        let took = (0..20)
+            .map(|_| {
+                let at = Instant::now();
+                std::hint::black_box(known_in(&entries, "when can i see the international space station"));
+                at.elapsed()
+            })
+            .min()
+            .unwrap_or_default();
+        assert!(took < Duration::from_micros(if cfg!(debug_assertions) { 5_000 } else { 200 }), "{took:?}");
     }
 
     #[test]

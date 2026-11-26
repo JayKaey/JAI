@@ -6524,6 +6524,21 @@ mod tests {
         assert_eq!(fuzzy("Can you start a timer"), None);
     }
 
+    /// Repro 2026-11-26 (`--exhaustive`): "Open my browser." was the corpus' slowest order, 1.1 ms
+    /// at best. It was read as said, then said another way, "open browser", which can only name
+    /// the browser again (`brain::another_way_knowing`). A cleaner name is still taken.
+    #[test]
+    fn an_app_read_as_said_is_not_read_again_under_the_same_name() {
+        let passes = |text: &str| {
+            let before = crate::brain::PASSES.with(|n| n.get());
+            let read = parse(text);
+            (read, crate::brain::PASSES.with(|n| n.get()) - before)
+        };
+        let browser = Some(Intent::Tool { name: "open_application", args: json!({"app_name": "browser"}) });
+        assert_eq!(passes("Open my browser."), (browser, 0));
+        assert_eq!(tool("start discord up"), Some(("open_application", json!({"app_name": "discord"}))));
+    }
+
     #[test]
     fn windows_widgets_and_lifecycle() {
         assert_eq!(fuzzy("Put that in a second window").map(|(n, _)| n), Some("spawn_native_window"));

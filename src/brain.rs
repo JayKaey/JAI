@@ -4084,7 +4084,15 @@ impl Fast {
 /// conversation, in the order `Brain::run_turn` asks them. (A router added there belongs here
 /// too: `another_way` decides by this whether a sentence is understood as it stands.)
 pub(crate) fn fast_as_said(text: &str) -> Option<Fast> {
+    #[cfg(test)]
+    PASSES.with(|passes| passes.set(passes.get() + 1));
     fast_before_the_parser(text).or_else(|| intents::parse_as_said(text).map(Fast::Intent))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// (Tests: how many whole fast-path passes this thread has made.)
+    pub(crate) static PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The routers `Brain::run_turn` asks before the parser, in its order.
@@ -4272,6 +4280,18 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
         if wordings.is_empty() {
             return None;
         }
+        // Where the sentence is read by a rule that takes any name, a wording of such a way only
+        // counts with a cleaner name (below): none where that reading has no name, nor where the
+        // wording ends in the very name it read ("open my browser" → "open browser"). Each such
+        // pass was 0.35 ms for nothing, and with the parser's reading at hand so was the one
+        // before it.
+        let no_cleaner = |wording: &str, any_name: bool, said: &Option<(&'static str, String)>| any_name && said.as_ref().is_none_or(|(_, was)| wording.ends_with(&format!(" {was}")));
+        if let Some(Some(direct)) = parsed {
+            let said = intents::name_taken(direct);
+            if intents::takes_any_name(direct) && wordings.iter().all(|(wording, any_name)| no_cleaner(wording, *any_name, &said)) {
+                return None;
+            }
+        }
         // How the sentence is read as it stands: not at all, by a rule that takes any words
         // for a name (weakly, and with which name), or for good.
         let name_in = |found: &Fast| match found {
@@ -4297,6 +4317,9 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
             return None;
         }
         wordings.into_iter().find_map(|(wording, any_name)| {
+            if weakly == Some(true) && no_cleaner(&wording, any_name, &said_name) {
+                return None;
+            }
             let found = match fast_as_said(&wording) {
                 Some(Fast::Other) | None => return None,
                 Some(found) => found,
