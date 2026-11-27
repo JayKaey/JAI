@@ -501,6 +501,21 @@ mod relevance_tests {
         assert_eq!(chosen_at(names.iter().copied(), "Headset"), None, "not there yet: looked for again");
     }
 
+    /// On Linux only the sound server's own names are microphones to choose by themselves: a raw
+    /// card that PipeWire holds, opened beside it, took the microphone from his default one, and
+    /// a plugin hears nothing (Sir, 2026-11-27, on J.A.I.OS: "JAI doesn't even hear me").
+    #[test]
+    fn on_linux_only_the_sound_servers_inputs_are_taken_by_themselves() {
+        for raw in ["hw:CARD=Device,DEV=0", "plughw:CARD=Device,DEV=0", "sysdefault:CARD=Device", "front:CARD=Device,DEV=0", "dsnoop:CARD=Device,DEV=0", "null", "samplerate", "lavrate", "jack", "oss"] {
+            assert!(is_virtual(raw, true), "{raw}");
+        }
+        for server in ["default", "pipewire", "pulse"] {
+            assert!(!is_virtual(server, true), "{server}");
+        }
+        // Windows' names are as they were: a real microphone is taken, a mix is not.
+        assert!(!is_virtual("Microphone (USB Audio Device)", false) && is_virtual("Stereo Mix (Realtek)", false));
+    }
+
     #[test]
     fn lyrics_through_the_microphone_are_the_songs_not_sirs() {
         // jai.log 2026-11-05 19:45:25-29, with Whisper's own log-probabilities.
@@ -981,8 +996,18 @@ pub fn list_input_devices() -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn is_virtual(name: &str) -> bool {
+/// A stream that delivers no sound this long has stalled.
+const MIC_STALL: Duration = Duration::from_secs(4);
+
+/// Whether an input of this name is no microphone of its own (`linux`: ALSA's names).
+fn is_virtual(name: &str, linux: bool) -> bool {
     let l = name.to_lowercase();
+    // (On Linux every ALSA name but the sound server's own is a plugin or a raw card, which
+    // PipeWire holds: opened beside it, a raw card takes the microphone from Sir's default one,
+    // and a plugin such as "null" or "samplerate" hears nothing of its own.)
+    if linux && !matches!(l.as_str(), "default" | "pipewire" | "pulse") {
+        return true;
+    }
     ["stereo mix", "stereomix", "what u hear", "vb-audio", "cable output", "voicemeeter", "steam streaming", "loopback", "monitor of"]
         .iter()
         .any(|k| l.contains(k))
@@ -1016,7 +1041,7 @@ fn select_input_devices(preferred: Option<&str>) -> Vec<(cpal::Device, String)> 
     for (d, n) in all {
         if Some(&n) == default_name.as_ref() && chosen.is_empty() {
             chosen.push((d, n));
-        } else if !is_virtual(&n) && d.default_input_config().is_ok() {
+        } else if !is_virtual(&n, cfg!(target_os = "linux")) && d.default_input_config().is_ok() {
             rest.push((d, n));
         }
     }
@@ -1025,7 +1050,9 @@ fn select_input_devices(preferred: Option<&str>) -> Vec<(cpal::Device, String)> 
             chosen.push(first);
         }
     }
-    if let Some(backup) = rest.into_iter().next() {
+    // (On Linux the sound server's default is the microphone Sir chose in Plasma's settings: a
+    // second stream through it would hear the same microphone twice.)
+    if let Some(backup) = rest.into_iter().next().filter(|_| cfg!(not(target_os = "linux"))) {
         chosen.push(backup);
     }
     chosen
@@ -1042,7 +1069,7 @@ fn build_input<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     mut producer: HeapProducer<f32>,
-    failed: Arc<AtomicBool>,
+    (failed, alive): (Arc<AtomicBool>, Arc<AtomicU64>),
     name: String,
 ) -> Result<cpal::Stream, cpal::BuildStreamError>
 where
@@ -1053,6 +1080,7 @@ where
     device.build_input_stream(
         config,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
+            alive.fetch_add(1, Ordering::Relaxed);
             if channels == 1 {
                 for &s in data {
                     let _ = producer.push(f32::from_sample(s));
@@ -1092,14 +1120,14 @@ where
     )
 }
 
-fn open_input(device: &cpal::Device, name: &str, failed: &Arc<AtomicBool>) -> Result<(cpal::Stream, DeviceFeed), String> {
+fn open_input(device: &cpal::Device, name: &str, failed: &Arc<AtomicBool>, alive: &Arc<AtomicU64>) -> Result<(cpal::Stream, DeviceFeed), String> {
     let supported = device.default_input_config().map_err(|e| e.to_string())?;
     let sample_rate = supported.sample_rate().0;
     let channels = supported.channels();
     let format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
     let (producer, consumer) = HeapRb::<f32>::new(sample_rate as usize * 2).split();
-    let f = Arc::clone(failed);
+    let f = (Arc::clone(failed), Arc::clone(alive));
     let n = name.to_string();
     let stream = match format {
         SampleFormat::F32 => build_input::<f32>(device, &config, producer, f, n),
@@ -1126,6 +1154,9 @@ fn open_input(device: &cpal::Device, name: &str, failed: &Arc<AtomicBool>) -> Re
 
 fn mic_thread(controls: Arc<AudioControls>, feeds_tx: mpsc::Sender<Vec<DeviceFeed>>) {
     let failed = Arc::new(AtomicBool::new(false));
+    // (Each delivery of sound counts here: a stream that stops delivering without an error, as
+    // one through a sound server that restarted does, is opened again.)
+    let alive = Arc::new(AtomicU64::new(0));
     let mut warned_empty = false;
     loop {
         let requested = controls.requested_mic();
@@ -1143,7 +1174,7 @@ fn mic_thread(controls: Arc<AudioControls>, feeds_tx: mpsc::Sender<Vec<DeviceFee
         let mut streams = Vec::new();
         let mut feeds = Vec::new();
         for (device, name) in &devices {
-            match open_input(device, name, &failed) {
+            match open_input(device, name, &failed, &alive) {
                 Ok((stream, feed)) => {
                     streams.push(stream);
                     feeds.push(feed);
@@ -1163,10 +1194,18 @@ fn mic_thread(controls: Arc<AudioControls>, feeds_tx: mpsc::Sender<Vec<DeviceFee
         // for every few seconds and taken once it is there.)
         let missing = requested.filter(|p| chosen_at(devices.iter().map(|(_, n)| n.as_str()), p).is_none());
         let mut looked = Instant::now();
+        let mut heard = (alive.load(Ordering::Relaxed), Instant::now());
         while !controls.device_switch.swap(false, Ordering::AcqRel) {
             if failed.swap(false, Ordering::AcqRel) {
                 warn!("[MIC] Input stream failed (device unplugged?); reopening.");
                 std::thread::sleep(Duration::from_millis(500));
+                break;
+            }
+            let count = alive.load(Ordering::Relaxed);
+            if count != heard.0 {
+                heard = (count, Instant::now());
+            } else if heard.1.elapsed() >= MIC_STALL {
+                warn!("[MIC] No sound delivered for {:?} (the sound server restarted?); reopening.", heard.1.elapsed());
                 break;
             }
             if let Some(p) = missing.as_deref().filter(|_| looked.elapsed() >= Duration::from_secs(5)) {

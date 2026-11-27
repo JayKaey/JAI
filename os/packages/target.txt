@@ -40,6 +40,8 @@ pipewire-pulse
 pipewire-alsa
 pipewire-jack
 wireplumber
+# (A laptop's built-in microphone on Intel's Smart Sound needs its firmware.)
+sof-firmware
 
 # KWin and the pieces of Plasma's session (plasma-desktop only for the safe mode)
 kwin

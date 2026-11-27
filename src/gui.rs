@@ -1093,18 +1093,20 @@ pub(crate) fn for_test_session(builder: egui::ViewportBuilder) -> egui::Viewport
     // A piece of the board Sir has had before comes up where it last stood, at the size it had,
     // unless an order of his placed it or another of his windows stands there; what the code
     // asks of it later is done. (His choice of 2026-11-14: "Windows remember their place".)
+    // Where it would come up on another of his windows, it takes the nearest free spot instead.
     let by_order = PLACED_BY_ORDER.with(|p| p.replace(false));
     let code = [builder.position.map(|p| [p.x, p.y]), builder.inner_size.map(|s| [s.x, s.y])];
     let piece = builder.position.is_some();
     let scale = points_scale();
-    if let Some([x, y, w, h]) = builder.title.as_deref().filter(|_| piece).and_then(|title| crate::own_windows::opening_place(title, code, by_order, |place| place_is_free(title, place))) {
+    let place = |title: &str, before: Option<[i32; 4]>| before.filter(|place| place_is_free(title, *place)).or_else(|| clear_of_his_windows(title, code));
+    if let Some([x, y, w, h]) = builder.title.as_deref().filter(|_| piece).and_then(|title| crate::own_windows::opening_place(title, code, by_order, |before| place(title, before))) {
         return builder.with_position(pos2(x as f32, y as f32) / scale).with_inner_size(vec2(w as f32, h as f32) / scale);
     }
     // Every other window opens in the middle of the monitor Sir is using, not always on his
     // first one, at the size he last gave it. (His choices of 2026-11-13, "Windows open where
     // you work", and 2026-11-26, "JAI should always try to open windows in the middle of the
     // screen".)
-    let builder = match builder.title.as_deref().filter(|_| !piece).and_then(|title| crate::own_windows::opening_place(title, code, by_order, |_| true)) {
+    let builder = match builder.title.as_deref().filter(|_| !piece).and_then(|title| crate::own_windows::opening_place(title, code, by_order, |before| before)) {
         Some([_, _, w, h]) => builder.with_inner_size(vec2(w as f32, h as f32) / scale),
         None => builder,
     };
@@ -1191,6 +1193,48 @@ fn place_is_free(title: &str, [x, y, w, h]: [i32; 4]) -> bool {
         info!("[HUD] '{title}' does not come up where it stood before: another of his windows stands there");
     }
     free
+}
+
+/// Where a piece of the board comes up that has no free place of its own (x, y, w, h): where the
+/// code puts it (None), unless another of his windows stands or comes up there; then the
+/// nearest spot on that monitor clear of them all. (Sir's picture of 2026-11-27: the calendar's
+/// card came up over the system column's daily briefing.)
+fn clear_of_his_windows(title: &str, code: [Option<[f32; 2]>; 2]) -> Option<[i32; 4]> {
+    let [Some([x, y]), Some([w, h])] = code else { return None };
+    if crate::hud_dock::overlap_allowed() {
+        return None;
+    }
+    let want = Rect::from_min_size(pos2(x, y), vec2(w, h));
+    let taken = in_the_way(title, &lock(&PLACES));
+    let scale = points_scale();
+    let monitors = crate::monitors::recent();
+    let middle = want.center() * scale;
+    let work = monitors.iter().find(|m| m.contains(middle.x as i32, middle.y as i32)).or_else(|| crate::monitors::primary(&monitors))?.work;
+    let to = clear_of(want, &taken, Rect::from_min_max(pos2(work[0] as f32, work[1] as f32) / scale, pos2(work[2] as f32, work[3] as f32) / scale))?;
+    info!("[HUD] '{title}' opens at {:.0},{:.0}: another of his windows stands where it would", to.min.x, to.min.y);
+    Some([to.min.x, to.min.y, to.width(), to.height()].map(|v| (v * scale).round() as i32))
+}
+
+/// `want` moved to the nearest spot in `work` that keeps the gap from every rect in `taken`,
+/// when it stands on one of them (`holo_stage::settle`). None: it stands clear.
+fn clear_of(want: Rect, taken: &[Rect], work: Rect) -> Option<Rect> {
+    taken.iter().any(|other| other.intersects(want.shrink(1.0))).then(|| crate::holo_stage::settle(work, want, taken, crate::holo_stage::GAP, WINDOW_TITLE_ROW))
+}
+
+/// The window of his this viewport is (titled `title`) grows to `height` (points) where it
+/// stands: his windows in the room it takes glide out of its way, as they do for one that
+/// opens. Once per height asked: the new size takes a frame or two to arrive.
+fn room_to_grow(ctx: &egui::Context, title: &str, height: f32) {
+    let asked = egui::Id::new("jai_room_to_grow");
+    let Some(at) = ctx.input(|i| i.viewport().inner_rect) else { return };
+    if height <= at.height() + 2.0 || ctx.data(|d| d.get_temp::<f32>(asked)) == Some(height) {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(asked, height));
+    let scale = points_scale();
+    let room = Rect::from_min_size(at.min, vec2(at.width(), height));
+    let keep = crate::own_windows::list().into_iter().find(|w| w.title == title).map(|w| w.hwnd);
+    crate::own_windows::make_room([room.left(), room.top(), room.right(), room.bottom()].map(|v| (v * scale).round() as i32), keep);
 }
 
 /// Where a window of JAI's own that has no place of its own opens (points): in the middle of
@@ -1284,8 +1328,8 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
         renderer: eframe::Renderer::Glow,
         centered: placement.is_none() && !fullscreen && start_on.is_none(),
         persist_window: false,
-        // (On Windows his windows wait for the screen's refresh in `pace`, once for all of them.)
-        vsync: cfg!(not(windows)),
+        // (His windows wait for the screen's refresh in `pace`, once for all of them.)
+        vsync: false,
         #[cfg(not(windows))]
         event_loop_builder: on_x11(),
         #[cfg(windows)]
@@ -1310,7 +1354,6 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
             // Every window of his draws on this thread: a busy PC's own work waits for its frames
             // (game mode's lowered class still puts it under the game).
             crate::platform::raise_thread_priority(false);
-            #[cfg(windows)]
             pace_by_the_screen(&cc.egui_ctx);
             Ok(Box::new(HudApp::new(cc, app, rt, model, restore)))
         }),
@@ -1324,11 +1367,10 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
 /// long (Sir's log at 74 Hz, again and again: "Slow frame: 54 ms (board and emblem 50)"), and a
 /// window being dragged or scrolled drew in every second to fifth refresh (Sir, 2026-11-21:
 /// "when i scroll through the menus and so it doesnt fell that smooth";
-/// `probe_windows_drawn_on_one_thread`). So on Windows no swap waits (`vsync: false`, as mpv
-/// does with OpenGL; DWM still shows every frame whole) and the thread waits once per refresh
-/// instead: a window that already drew in this one waits for the next, then all of them draw in
-/// it. (Only a frame's first pass: egui may draw one twice.)
-#[cfg(windows)]
+/// `probe_windows_drawn_on_one_thread`; on J.A.I.OS too, under XWayland). So no swap waits
+/// (`vsync: false`, as mpv does with OpenGL; the compositor still shows every frame whole) and
+/// the thread waits once per refresh instead: a window that already drew in this one waits for
+/// the next, then all of them draw in it. (Only a frame's first pass: egui may draw one twice.)
 fn pace_by_the_screen(ctx: &egui::Context) {
     ctx.on_begin_pass(
         "pace",
@@ -1340,7 +1382,6 @@ fn pace_by_the_screen(ctx: &egui::Context) {
     );
 }
 
-#[cfg(windows)]
 fn pace(viewport: ViewportId) {
     static DREW: Mutex<(i64, Vec<ViewportId>)> = Mutex::new((0, Vec::new()));
     let mut drew = lock(&DREW);
@@ -1402,6 +1443,17 @@ fn refresh_times() -> (i64, Duration) {
     let (now, vblank, period, hz) = screen_clock();
     let last = last_refresh(now, vblank, period);
     (last, Duration::from_secs_f64((last + period - now) as f64 / hz as f64))
+}
+
+/// On Linux the same from a train of refreshes at the fastest monitor's rate (`display_hz`).
+// shortcut: the train's phase is not the screen's own; read Present's vblank notices if frames judder.
+#[cfg(not(windows))]
+fn refresh_times() -> (i64, Duration) {
+    static START: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+    let period = 1e9 / f64::from(display_hz().clamp(30.0, 500.0));
+    let now = START.elapsed().as_nanos() as f64;
+    let n = (now / period).floor();
+    (n as i64, Duration::from_nanos(((n + 1.0) * period - now) as u64))
 }
 
 /// The refresh at or before `now` in the train of `period` through DWM's `vblank`, which may
@@ -3267,15 +3319,7 @@ impl HudApp {
     fn popups(&self, ctx: &egui::Context, dt: f32) {
         use crate::dynamic_popups::PopupAction;
         for action in crate::dynamic_popups::show(ctx, self.palette.card_style(), dt) {
-            let media = |a: crate::media::MediaAction| {
-                self.rt.spawn(async move {
-                    let _ = crate::media::execute(a).await;
-                });
-            };
             match action {
-                PopupAction::MediaPrevious => media(crate::media::MediaAction::Previous),
-                PopupAction::MediaPlayPause => media(crate::media::MediaAction::PlayPause),
-                PopupAction::MediaNext => media(crate::media::MediaAction::Next),
                 // (A drag of the slider is a hundred changes a second: the mixer carries out the
                 // latest, one call at a time.)
                 PopupAction::SetVolume { target, percent } => {
@@ -6103,6 +6147,7 @@ impl HudApp {
                 let used = Frame::none().inner_margin(Margin::same(MARGIN)).show(ui, |ui| blocks(self, ui)).response.rect;
                 if (used.height() - ui.ctx().screen_rect().height()).abs() > 2.0 {
                     ui.ctx().send_viewport_cmd(ViewportCommand::InnerSize(vec2(SYSTEM_COLUMN + 2.0 * MARGIN, used.height())));
+                    room_to_grow(ui.ctx(), "System \u{2014} J.A.I.", used.height());
                 }
             });
             self.system_column_rect = None;
@@ -6687,7 +6732,7 @@ fn nobody_watching() -> bool {
     UNWATCHED.load(Ordering::Relaxed)
 }
 
-/// The fastest connected monitor's refresh rate (Hz); 60 until it is known. Windows is asked
+/// The fastest connected monitor's refresh rate (Hz); 60 until it is known. The system is asked
 /// every 30 s on a thread of its own: the display driver can take a frame or more to answer
 /// (12 ms measured), which the HUD's thread must never wait for.
 fn display_hz() -> f32 {
@@ -10609,14 +10654,13 @@ mod tests {
         crate::hud_dock::forget(settings_panel::ID);
     }
 
-    /// The cards that come up beside the core: the song, the day's lessons, a result with a
-    /// chart, a tool being built.
+    /// The cards that come up beside the core: the day's lessons, a result with a chart, a tool
+    /// being built.
     #[test]
     fn gallery_popup_cards() {
         let _alone = board_alone();
         use crate::dynamic_popups::{self as popups, PopupPayload};
         let ids = [
-            popups::spawn(PopupPayload::NowPlayingMediaCard { title: "Highway to Hell".into(), artist: "AC/DC".into(), playlist: Some("Rock".into()), player_name: "Sonora".into(), progress: 0.4, is_playing: true }, None),
             popups::spawn(PopupPayload::ScheduleAndCalendarCard { title: "Today".into(), entries: vec![("08:00".into(), "Maths".into()), ("09:45".into(), "Physics".into()), ("11:30".into(), "English".into())], highlight_index: Some(1) }, None),
             popups::spawn(PopupPayload::VisualDataCard { title: "Kinematics".into(), markdown_or_code: "v = 12 m/s after 3 s".into(), chart_points: vec![0.0, 4.0, 8.0, 12.0], action_buttons: vec!["Copy".into()] }, None),
             popups::spawn(PopupPayload::ToolForgeLiveCard { tool_name: "playlist_player".into(), steps_summary: vec!["scan the library".into(), "write the tool".into()], status: "verified".into() }, None),
@@ -11574,6 +11618,22 @@ mod tests {
         let before = away[0];
         make_way_before_shown(work, Rect::from_center_size(work.center(), vec2(560.0, 400.0)), away.iter_mut());
         assert_eq!(away[0], before);
+    }
+
+    /// A piece of the board never comes up over another of his windows (Sir's picture of
+    /// 2026-11-27: the calendar's card over the system column's daily briefing): it takes the
+    /// nearest spot beside it. One that stands clear keeps the place the board gave it.
+    #[test]
+    fn a_piece_opens_clear_of_his_other_windows() {
+        let work = Rect::from_min_size(Pos2::ZERO, vec2(2560.0, 1400.0));
+        let column = Rect::from_min_size(pos2(24.0, 110.0), vec2(380.0, 600.0));
+        let card = Rect::from_min_size(pos2(60.0, 300.0), vec2(420.0, 260.0));
+        let to = clear_of(card, &[column], work).expect("it stood on the column");
+        assert!(!to.intersects(column.expand(crate::holo_stage::GAP / 2.0 - 1.0)), "{to:?}");
+        assert!(work.contains_rect(to) && to.size() == card.size(), "{to:?}");
+        assert!((to.min - card.min).length() < 500.0, "beside the column, not across the screen: {to:?}");
+        let free = Rect::from_min_size(pos2(1600.0, 300.0), card.size());
+        assert_eq!(clear_of(free, &[column], work), None);
     }
 
     /// The board ties each of his windows to the core as it tied its blocks: where they stand

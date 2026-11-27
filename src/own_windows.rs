@@ -355,15 +355,15 @@ pub fn place_of(title: &str) -> Option<[i32; 4]> {
     on_a_monitor(place, &crate::monitors::recent()).then_some(place)
 }
 
-/// Where the window titled `title` stands (x, y, w, h) as it opens and after: where it last
-/// stood, unless an order of Sir's placed it (`by_order`) or that place is not `free` (another
-/// of his windows stands there, or comes up there with it), for as long as the code asks no
-/// other place or size of it (`code`: its own position and size for it, as given each frame).
+/// Where the window titled `title` stands (x, y, w, h) as it opens and after: what `place` makes
+/// of where it last stood (None: it never stood anywhere yet), unless an order of Sir's placed
+/// it (`by_order`), for as long as the code asks no other place or size of it (`code`: its own
+/// position and size for it, as given each frame). None: where the code puts it.
 /// (Given anew each frame, the place kept every move and size of the code's from the window.)
-pub fn opening_place(title: &str, code: [Option<[f32; 2]>; 2], by_order: bool, free: impl FnOnce([i32; 4]) -> bool) -> Option<[i32; 4]> {
-    // (Decided once, as it first opens, and outside the lock: `free` looks at the others.)
+pub fn opening_place(title: &str, code: [Option<[f32; 2]>; 2], by_order: bool, place: impl FnOnce(Option<[i32; 4]>) -> Option<[i32; 4]>) -> Option<[i32; 4]> {
+    // (Decided once, as it first opens, and outside the lock: `place` looks at the others.)
     let first = !lock(&OPENED).iter().any(|(t, _, _)| t == title);
-    let place = if first && !by_order { place_of(title).filter(|place| free(*place)) } else { None };
+    let place = if first && !by_order { place(place_of(title)) } else { None };
     opened_at(&mut lock(&OPENED), title, code, || place)
 }
 

@@ -85,13 +85,13 @@ pub fn list() -> Vec<Monitor> {
         .collect()
 }
 
-/// The highest refresh rate (Hz) among the connected monitors, as Windows has it set right
+/// The highest refresh rate (Hz) among the connected monitors, as the system has it set right
 /// now; None when it is not known.
 pub fn fastest_refresh_hz() -> Option<u32> {
     #[cfg(windows)]
     return crate::win32::fastest_refresh_hz();
     #[cfg(not(windows))]
-    None
+    crate::x11::fastest_refresh_hz()
 }
 
 #[cfg(not(windows))]

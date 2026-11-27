@@ -1,14 +1,14 @@
 //! Dynamic pop-up cards: the HUD stays empty until something needs a picture, then a card
 //! springs out beside the orb and folds away again.
 //!
-//! * `NowPlayingMediaCard` slides in when music starts or changes (previous / play-pause / next + volume) and
-//!   collapses into a pill after 8 s; `VolumeMixerOsd` is a Dynamic-Island volume bar (3 s);
-//!   schedule, tool-forge, confirmation and free-form data cards (`pop_up_ui_card`) follow.
+//! * `VolumeMixerOsd` is a Dynamic-Island volume bar (3 s); schedule, tool-forge, confirmation
+//!   and free-form data cards (`pop_up_ui_card`) follow. Music puts no card up (Sir,
+//!   2026-11-27: "Dont show the music icon in the right down of my screen").
 //! * Every card animates from scale 0.88 / alpha 0 / +24 px to 1 / 1 / 0 on a spring
 //!   (stiffness 220, damping 24), fades out when its TTL runs out (never while hovered or
 //!   pinned), and goes with one click on the close button or "dismiss pop-ups".
-//! * A card of the same kind updates in place (the volume OSD follows the slider, the media
-//!   card follows the track) instead of stacking duplicates.
+//! * A card of the same kind updates in place (the volume OSD follows the slider) instead of
+//!   stacking duplicates.
 
 use eframe::egui::{self, emath::TSTransform, pos2, vec2, Color32, Id, Order, Rect, RichText, Sense, Stroke};
 use crate::holo::{font, Face};
@@ -56,7 +56,6 @@ impl SpringDamper {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PopupPayload {
-    NowPlayingMediaCard { title: String, artist: String, playlist: Option<String>, player_name: String, progress: f32, is_playing: bool },
     VolumeMixerOsd { target_name: String, percent: u8, is_muted: bool },
     ScheduleAndCalendarCard { title: String, entries: Vec<(String, String)>, highlight_index: Option<usize> },
     ToolForgeLiveCard { tool_name: String, steps_summary: Vec<String>, status: String },
@@ -68,7 +67,6 @@ impl PopupPayload {
     /// Cards of one key replace each other.
     pub fn key(&self) -> String {
         match self {
-            Self::NowPlayingMediaCard { .. } => "media".into(),
             Self::VolumeMixerOsd { target_name, .. } => format!("volume:{}", target_name.to_lowercase()),
             Self::ScheduleAndCalendarCard { .. } => "schedule".into(),
             Self::ToolForgeLiveCard { tool_name, .. } => format!("forge:{tool_name}"),
@@ -80,7 +78,6 @@ impl PopupPayload {
     /// Seconds before the card fades out on its own (`None`: until dismissed or answered).
     pub fn default_ttl(&self) -> Option<f32> {
         match self {
-            Self::NowPlayingMediaCard { .. } => None,
             Self::VolumeMixerOsd { .. } => Some(3.0),
             Self::ScheduleAndCalendarCard { .. } => Some(20.0),
             Self::ToolForgeLiveCard { .. } => Some(12.0),
@@ -88,19 +85,11 @@ impl PopupPayload {
             Self::VisualDataCard { .. } => Some(30.0),
         }
     }
-
-    /// Seconds before the card shrinks into a pill (the media card).
-    fn collapse_after(&self) -> Option<f32> {
-        matches!(self, Self::NowPlayingMediaCard { .. }).then_some(8.0)
-    }
 }
 
 /// What a click on a card asks the HUD to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PopupAction {
-    MediaPrevious,
-    MediaPlayPause,
-    MediaNext,
     SetVolume { target: String, percent: u8 },
     Confirm(String),
     Cancel(String),
@@ -116,7 +105,6 @@ pub struct DynamicHudPopup {
     pub age: f32,
     pub pinned: bool,
     pub hovered: bool,
-    pub collapsed: bool,
     pub dismissing: bool,
     pub anim: SpringDamper,
     rect: Option<Rect>,
@@ -145,14 +133,13 @@ impl DynamicPopupManager {
             p.payload = payload;
             p.ttl_secs = ttl_secs;
             p.age = 0.0;
-            p.collapsed = false;
             p.dismissing = false;
             p.anim.target = 1.0;
             return p.id;
         }
         self.next_id += 1;
         let id = self.next_id;
-        self.popups.push(DynamicHudPopup { id, payload, ttl_secs, age: 0.0, pinned: false, hovered: false, collapsed: false, dismissing: false, anim: SpringDamper::new(0.0, 1.0), rect: None });
+        self.popups.push(DynamicHudPopup { id, payload, ttl_secs, age: 0.0, pinned: false, hovered: false, dismissing: false, anim: SpringDamper::new(0.0, 1.0), rect: None });
         id
     }
 
@@ -164,9 +151,6 @@ impl DynamicPopupManager {
             }
             if !p.dismissing && p.ttl_secs.is_some_and(|ttl| p.age >= ttl) {
                 p.dismissing = true;
-            }
-            if !p.collapsed && p.payload.collapse_after().is_some_and(|after| p.age >= after) {
-                p.collapsed = true;
             }
             p.anim.target = if p.dismissing { 0.0 } else { 1.0 };
             p.anim.step(dt);
@@ -226,7 +210,7 @@ impl DynamicPopupManager {
     }
 
     fn animating(&self) -> bool {
-        self.popups.iter().any(|p| !p.anim.settled() || p.ttl_secs.is_some() || p.payload.collapse_after().is_some_and(|a| !p.collapsed && p.age < a))
+        self.popups.iter().any(|p| !p.anim.settled() || p.ttl_secs.is_some())
     }
 }
 
@@ -264,17 +248,6 @@ pub fn dismiss_key(key: &str) {
     for id in ids {
         m.dismiss(id);
     }
-}
-
-/// The media card for what just started playing (from the player's media session).
-pub fn now_playing(title: &str, artist: &str, playlist: Option<&str>, player_name: &str) {
-    if title.trim().is_empty() {
-        return;
-    }
-    spawn(
-        PopupPayload::NowPlayingMediaCard { title: title.into(), artist: artist.into(), playlist: playlist.map(String::from), player_name: player_name.into(), progress: 0.0, is_playing: true },
-        None,
-    );
 }
 
 /// The timeline card for a calendar or timetable result: every line that starts with a time
@@ -414,7 +387,7 @@ pub fn show(ctx: &egui::Context, style: CardStyle, dt: f32) -> Vec<PopupAction> 
     let mut pins = Vec::new();
     for p in m.popups.iter_mut().rev() {
         let (scale, alpha, dy) = p.transform();
-        let height = p.rect.map(|r| r.height()).unwrap_or(if p.collapsed { 36.0 } else { 120.0 });
+        let height = p.rect.map(|r| r.height()).unwrap_or(120.0);
         let top = bottom - height;
         // (On whole pixels: a card between two would draw its text and border soft.)
         let ppp = ctx.pixels_per_point();
@@ -484,31 +457,6 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
         });
     };
     match &p.payload {
-        PopupPayload::NowPlayingMediaCard { title, artist, playlist, player_name, progress, is_playing } => {
-            if p.collapsed {
-                let r = ui.horizontal(|ui| {
-                    ui.label(RichText::new(if *is_playing { "PLAY" } else { "PAUSE" }).font(font(Face::Label, 8.5)).color(style.accent));
-                    ui.label(RichText::new(if artist.is_empty() { title.clone() } else { format!("{title} — {artist}") }).font(font(Face::Body, 11.0)).color(style.text));
-                });
-                if ui.interact(r.response.rect, Id::new(("popup_pill", p.id)), Sense::click()).clicked() {
-                    p.collapsed = false;
-                    p.age = 0.0;
-                }
-                return;
-            }
-            header(ui, title, dismiss, pins);
-            ui.label(RichText::new(artist).font(font(Face::Body, 12.5)).color(style.muted));
-            let from = playlist.as_ref().map(|l| format!("{player_name} · {l}")).unwrap_or_else(|| player_name.clone());
-            ui.label(RichText::new(from).font(font(Face::Body, 11.0)).color(style.muted));
-            crate::holo_ui::bar(ui, progress.clamp(0.0, 1.0), ui.available_width());
-            ui.horizontal(|ui| {
-                for (label, action) in [("PREV", PopupAction::MediaPrevious), (if *is_playing { "PAUSE" } else { "PLAY" }, PopupAction::MediaPlayPause), ("NEXT", PopupAction::MediaNext)] {
-                    if crate::holo_ui::key(ui, label).clicked() {
-                        actions.push(action);
-                    }
-                }
-            });
-        }
         PopupPayload::VolumeMixerOsd { target_name, percent, is_muted } => {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(if *is_muted { "MUTED" } else { "SOUND" }).font(font(Face::Label, 8.5)).color(style.accent));
@@ -587,8 +535,18 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
 mod tests {
     use super::*;
 
-    fn media(title: &str) -> PopupPayload {
-        PopupPayload::NowPlayingMediaCard { title: title.into(), artist: "AC/DC".into(), playlist: Some("Jays Rock".into()), player_name: "Sonora".into(), progress: 0.1, is_playing: true }
+    fn data(title: &str) -> PopupPayload {
+        PopupPayload::VisualDataCard { title: title.into(), markdown_or_code: "42".into(), chart_points: vec![], action_buttons: vec![] }
+    }
+
+    /// Sir, 2026-11-27: "Dont show the music icon in the right down of my screen". Starting
+    /// music put a media card (and after 8 s its pill) into the bottom-right corner; nothing
+    /// that plays music puts a card up any more.
+    #[test]
+    fn music_puts_no_card_in_the_corner() {
+        for (file, source) in [("music.rs", include_str!("music.rs")), ("sonora.rs", include_str!("sonora.rs")), ("media.rs", include_str!("media.rs"))] {
+            assert!(!source.contains("dynamic_popups::"), "{file} puts a card up");
+        }
     }
 
     fn run(m: &mut DynamicPopupManager, secs: f32) {
@@ -618,7 +576,7 @@ mod tests {
     #[test]
     fn spring_animates_entrance_from_088_to_1() {
         let mut m = DynamicPopupManager::default();
-        let id = m.spawn(media("Highway to Hell"), None);
+        let id = m.spawn(data("Result"), None);
         let (scale, alpha, dy) = m.get(id).unwrap().transform();
         assert!((scale - 0.88).abs() < 1e-4 && alpha == 0.0 && (dy - 24.0).abs() < 1e-4);
         m.step(0.05);
@@ -659,18 +617,6 @@ mod tests {
     }
 
     #[test]
-    fn media_card_collapses_into_pill_after_eight_seconds_and_updates_in_place() {
-        let mut m = DynamicPopupManager::default();
-        let id = m.spawn(media("Highway to Hell"), None);
-        run(&mut m, 8.2);
-        assert!(m.get(id).unwrap().collapsed);
-        let again = m.spawn(media("Back in Black"), None);
-        assert_eq!(again, id, "same card, new track");
-        assert!(!m.get(id).unwrap().collapsed);
-        assert_eq!(m.len(), 1);
-    }
-
-    #[test]
     fn dismiss_is_instant_on_click_and_all_respects_pins() {
         let mut m = DynamicPopupManager::default();
         let a = m.spawn(PopupPayload::ToolForgeLiveCard { tool_name: "playlist_player".into(), steps_summary: vec!["scan".into()], status: "verified".into() }, None);
@@ -681,7 +627,7 @@ mod tests {
         assert!(m.get(a).is_none());
         assert_eq!(m.dismiss_all(false), 0, "the pinned card stays");
         assert_eq!(m.dismiss_all(true), 1);
-        m.spawn(media("x"), None);
+        m.spawn(data("x"), None);
         assert!(m.clear() >= 1);
         assert!(m.is_empty());
     }

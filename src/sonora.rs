@@ -285,6 +285,34 @@ pub fn link_of(uri: &str) -> Option<String> {
     }
 }
 
+/// What JAI keeps for an item of Sonora's library of `provider` (`kind`: track, album, playlist,
+/// artist): a Spotify URI, else that provider's link as Sonora reads it (upstream
+/// `crates/music/src/<provider>/links.rs`). None for a provider without links (a server of
+/// Sir's own, local files) or an id no link can carry.
+pub fn item_uri(provider: &str, kind: &str, id: &str) -> Option<String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
+        return None;
+    }
+    Some(match (provider, kind) {
+        ("spotify", _) => format!("spotify:{kind}:{id}"),
+        ("youtube", "playlist") => format!("https://music.youtube.com/playlist?list={id}"),
+        ("youtube", "track") => format!("https://music.youtube.com/watch?v={id}"),
+        ("youtube", "album") => format!("https://music.youtube.com/browse/{id}"),
+        ("youtube", _) => format!("https://music.youtube.com/channel/{id}"),
+        ("deezer", _) => format!("https://www.deezer.com/{kind}/{id}"),
+        ("tidal", _) => format!("https://tidal.com/browse/{kind}/{id}"),
+        ("apple", "track") => format!("https://music.apple.com/song/{id}"),
+        ("apple", _) => format!("https://music.apple.com/{kind}/{id}"),
+        _ => return None,
+    })
+}
+
+/// A search on Sonora's current provider: its best `limit` hits of `kind` (song, album, artist,
+/// playlist), each with the link a queue order or a hand-off takes.
+pub fn search(text: &str, kind: &str, limit: u16) -> Value {
+    json!({ "search": { "text": text, "kind": kind, "limit": limit } })
+}
+
 // ------------------------------------------------------------------------- answers ----
 
 /// "Highway to Hell by AC/DC (playing, 1:12 of 3:28, liked)" from `current-track`'s value.
@@ -368,6 +396,7 @@ mod tests {
         is(queue("add", &[Item::Path(r"C:\Music\a.flac".into())]), r#"{"queue":{"add":[{"path":"C:\\Music\\a.flac"}]}}"#);
         is(queue_snapshot(), r#"{"queue":"snapshot"}"#);
         is(provider("spotify"), r#"{"provider":{"current":"spotify"}}"#);
+        is(search("Lofi Beats", "playlist", 1), r#"{"search":{"text":"Lofi Beats","kind":"playlist","limit":1}}"#);
         // The envelope: version 2, the body under "body".
         is(json!({ "v": VERSION, "body": playback("toggle") }), r#"{"v":2,"body":{"playback":"toggle"}}"#);
     }
@@ -379,6 +408,26 @@ mod tests {
         assert_eq!(link_of("https://open.spotify.com/album/x").as_deref(), Some("https://open.spotify.com/album/x"));
         assert_eq!(link_of("spotify:user:max:playlist:x"), None);
         assert_eq!(link_of("sonora-local:C:/x.m3u:Road Trip"), None);
+    }
+
+    /// Every provider's library item becomes the link its own `links.rs` reads back as the same
+    /// kind and id (Sir, 2026-11-27: "regardless of what you have connected to Sonora").
+    #[test]
+    fn every_providers_items_become_links_sonora_reads() {
+        assert_eq!(item_uri("spotify", "playlist", "ExamplePlaylistId00000").as_deref(), Some("spotify:playlist:ExamplePlaylistId00000"));
+        assert_eq!(item_uri("youtube", "playlist", "PLexample_list-1").as_deref(), Some("https://music.youtube.com/playlist?list=PLexample_list-1"));
+        assert_eq!(item_uri("youtube", "track", "dQw4w9WgXcQ").as_deref(), Some("https://music.youtube.com/watch?v=dQw4w9WgXcQ"));
+        assert_eq!(item_uri("youtube", "album", "MPREb_example").as_deref(), Some("https://music.youtube.com/browse/MPREb_example"));
+        assert_eq!(item_uri("youtube", "artist", "UCexample").as_deref(), Some("https://music.youtube.com/channel/UCexample"));
+        assert_eq!(item_uri("deezer", "playlist", "12345").as_deref(), Some("https://www.deezer.com/playlist/12345"));
+        assert_eq!(item_uri("tidal", "album", "12345").as_deref(), Some("https://tidal.com/browse/album/12345"));
+        assert_eq!(item_uri("apple", "track", "12345").as_deref(), Some("https://music.apple.com/song/12345"));
+        assert_eq!(item_uri("apple", "playlist", "pl.u-example").as_deref(), Some("https://music.apple.com/playlist/pl.u-example"));
+        // Every link but Spotify's is handed over as it is.
+        assert_eq!(link_of(&item_uri("deezer", "album", "12345").unwrap()).as_deref(), Some("https://www.deezer.com/album/12345"));
+        assert_eq!(item_uri("subsonic", "playlist", "abc"), None, "a server of his own has no link");
+        assert_eq!(item_uri("youtube", "playlist", "x&y=1"), None, "an id that would break the link");
+        assert_eq!(item_uri("spotify", "track", ""), None);
     }
 
     /// Sonora's answers (upstream `crates/cli/src/wire.rs`) read back.

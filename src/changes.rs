@@ -91,6 +91,21 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
     Release {
+        date: "2026-11-27",
+        name: "Sonora plays lists, windows keep apart, J.A.I.OS hears",
+        entries: &[
+            better("Playlists play as themselves on Sonora", "\"Play my Focus playlist\" starts it as Sonora's Play does, so shuffle mixes that list alone."),
+            better("Sonora with any music service", "Playlists, albums and songs of any service Sonora is signed in to, not only Spotify's."),
+            fixed("No music card in the corner", "Music playing no longer puts a card with its keys in the bottom right of your screen."),
+            fixed("Windows no longer open on each other", "A card or the system column opens beside your other windows; growing, it pushes them aside."),
+            fixed("J.A.I.OS: he hears you", "He waits for the sound server, takes your default microphone, and reopens one gone quiet."),
+            fixed("J.A.I.OS: the graphics driver", "The installer gives an NVIDIA card its driver when the hardware check left it without one."),
+            fixed("J.A.I.OS: laptop microphones", "Intel's Smart Sound firmware is installed, which a laptop's built-in microphone needs."),
+            better("J.A.I.OS: smooth windows", "On Linux his windows draw together once per refresh instead of each waiting for one in turn."),
+            fixed("J.A.I.OS: a quicker desktop", "The desktop draws four times quicker and the core twice as quick, so it answers clicks sooner."),
+        ],
+    },
+    Release {
         date: "2026-11-26",
         name: "Alarms, better ears and windows that make way",
         entries: &[

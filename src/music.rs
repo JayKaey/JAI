@@ -41,19 +41,6 @@ impl ItemKind {
     }
 }
 
-/// What the media card shows for an item that started (title, artist, playlist): a playlist
-/// shows the song the player names as playing in it; its owner is no artist (Spotify gives its
-/// account id stood on the card as the artist, 2026-11-22).
-fn card_of<'a>(item: &'a LibraryItem, result: &str) -> (String, String, Option<&'a str>) {
-    if !matches!(item.kind, ItemKind::Playlist | ItemKind::LocalPlaylist) {
-        return (item.name.clone(), item.artist.clone(), None);
-    }
-    match crate::brain::now_song(result).and_then(|song| song.rsplit_once(" by ")) {
-        Some((song, artist)) => (song.to_string(), artist.to_string(), Some(&item.name)),
-        None => (item.name.clone(), String::new(), None),
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct LibraryItem {
     pub kind: ItemKind,
@@ -309,7 +296,10 @@ fn album_position(track_uri: &str) -> Option<AlbumPosition> {
     TRACK_ALBUMS.read().ok()?.get(track_uri).cloned()
 }
 
-/// Playlists, saved songs, albums and artists from Sonora's Spotify library snapshot.
+/// Playlists, saved songs, albums and artists from Sonora's library snapshots, of every provider
+/// it keeps one of (`spotify/playlists`, `youtube/playlists` …): a Spotify item keeps its
+/// `spotify:` URI, any other its provider's link (Sir, 2026-11-27: "regardless of what you have
+/// connected to Sonora").
 fn read_sonora(path: &Path) -> Vec<LibraryItem> {
     let uri = format!("file:{}?mode=ro", path.display().to_string().replace('\\', "/"));
     let conn = match Connection::open_with_flags(&uri, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI) {
@@ -321,7 +311,18 @@ fn read_sonora(path: &Path) -> Vec<LibraryItem> {
     };
     let _ = conn.busy_timeout(Duration::from_millis(500));
     let mut items = Vec::new();
-    for (key, kind) in [("spotify/playlists", ItemKind::Playlist), ("spotify/songs", ItemKind::Track), ("spotify/albums", ItemKind::Album), ("spotify/artists", ItemKind::Artist)] {
+    let keys: Vec<String> = conn
+        .prepare("SELECT key FROM snapshots WHERE key GLOB '*/playlists' OR key GLOB '*/songs' OR key GLOB '*/albums' OR key GLOB '*/artists' ORDER BY key")
+        .and_then(|mut stmt| stmt.query_map([], |r| r.get::<_, String>(0))?.collect())
+        .unwrap_or_default();
+    for key in keys {
+        let Some((provider, part)) = key.split_once('/') else { continue };
+        let kind = match part {
+            "playlists" => ItemKind::Playlist,
+            "songs" => ItemKind::Track,
+            "albums" => ItemKind::Album,
+            _ => ItemKind::Artist,
+        };
         let raw: Option<String> = conn.query_row("SELECT value FROM snapshots WHERE key = ?1", params![key], |r| r.get(0)).ok();
         let Some(v) = raw.and_then(|r| serde_json::from_str::<Value>(&r).ok()) else { continue };
         for row in v["rows"].as_array().into_iter().flatten() {
@@ -339,15 +340,16 @@ fn read_sonora(path: &Path) -> Vec<LibraryItem> {
                 ItemKind::Playlist => row["owner"].as_str().unwrap_or("").to_string(),
                 _ => artists_text(&row["artists"]),
             };
-            if kind == ItemKind::Track {
+            let Some(uri) = crate::sonora::item_uri(provider, prefix, id) else { continue };
+            if kind == ItemKind::Track && provider == "spotify" {
                 if let (Some(album), Some(number)) = (row["album_id"].as_str().filter(|a| !a.is_empty()), row["track_number"].as_u64()) {
                     let disc = row["disc_number"].as_u64().unwrap_or(1) as u32;
                     if let Ok(mut albums) = TRACK_ALBUMS.write() {
-                        albums.insert(format!("spotify:track:{id}"), (format!("spotify:album:{album}"), disc, number as u32));
+                        albums.insert(uri.clone(), (format!("spotify:album:{album}"), disc, number as u32));
                     }
                 }
             }
-            items.push(LibraryItem { kind, name: name.trim().to_string(), uri: format!("spotify:{prefix}:{id}"), artist, source: "Sonora library" });
+            items.push(LibraryItem { kind, name: name.trim().to_string(), uri, artist, source: "Sonora library" });
         }
     }
     items
@@ -1214,8 +1216,6 @@ impl MusicEngine {
             _ => self.play_spotify(&item).await,
         }?;
         info!("[MUSIC] {result}");
-        let (title, artist, list) = card_of(&item, &result);
-        crate::dynamic_popups::now_playing(&title, &artist, context.as_ref().map(|c| c.name.as_str()).or(list), &player_name(player));
         if matches!(item.kind, ItemKind::Playlist | ItemKind::LocalPlaylist) {
             self.set_preference("last_playlist", &item.name);
         }
@@ -1313,7 +1313,7 @@ impl MusicEngine {
             // A queue from the entry on, in playlist order.
             let queue: Vec<String> = members[index..].iter().filter(|m| m.kind == ItemKind::LocalFile).take(1000).map(|m| m.uri.clone()).collect();
             let files: Vec<_> = queue.iter().map(|path| crate::sonora::Item::Path(path.clone())).collect();
-            let piped = if player == "sonora" { play_on_sonora(&files, &format!("'{}' and the rest of '{}'", track.name, list.name), None).await } else { None };
+            let piped = if player == "sonora" { play_on_sonora(&files, &format!("'{}' and the rest of '{}'", track.name, list.name), None, None).await } else { None };
             if let Some(done) = piped {
                 done?
             } else if player == "sonora" {
@@ -1332,7 +1332,6 @@ impl MusicEngine {
         };
         *self.inner.last_played.lock().unwrap_or_else(|e| e.into_inner()) = Some(list.clone());
         self.set_preference("last_playlist", &list.name);
-        crate::dynamic_popups::now_playing(&track.name, &track.artist, Some(&list.name), &player_name(player));
         Ok(format!("{result} Track {} of {} in your playlist '{}', played directly (no search).", index + 1, members.len(), list.name))
     }
 
@@ -1519,19 +1518,104 @@ fn sonora_items(item: &LibraryItem, members: &[LibraryItem]) -> Vec<crate::sonor
     }
 }
 
-/// Plays `items` at once on Sonora through its remote control, the queue kept after them.
-/// None: no Sonora answers there (an older one is handed the item instead).
-async fn play_on_sonora(items: &[crate::sonora::Item], what: &str, want: Option<&str>) -> Option<Result<String, String>> {
+/// Plays `items` at once on Sonora through its remote control, the queue kept after them; a
+/// playlist or album in `list` (with the row to start at) is first started as that list, the way
+/// Sonora's Play starts it. None: no Sonora answers there (an older one is handed the item instead).
+async fn play_on_sonora(items: &[crate::sonora::Item], what: &str, want: Option<&str>, list: Option<(&LibraryItem, usize)>) -> Option<Result<String, String>> {
     if items.is_empty() {
         return None;
     }
     let fresh = sonora_up().await?;
+    if let Some((list, row)) = list {
+        match start_list(list, row, want, fresh).await {
+            Some(Some(now)) => return Some(Ok(format!("Playing {what} on Sonora. Now playing: {now}."))),
+            Some(None) => return Some(Ok(format!("Sonora took {what}; it is starting."))),
+            None => warn!("[MUSIC] '{}' did not start as its own list on Sonora; queued instead", list.name),
+        }
+    }
+    let queued = if list.is_some() { ", queued after what played (its own page didn't start it)" } else { "" };
     Some(match queue_on_sonora("play", items, fresh).await {
         Ok(()) => Ok(match sonora_now(want).await {
-            Some(now) => format!("Playing {what} on Sonora. Now playing: {now}."),
-            None => format!("Sonora took {what}; it is starting."),
+            Some(now) => format!("Playing {what} on Sonora{queued}. Now playing: {now}."),
+            None => format!("Sonora took {what}{queued}; it is starting."),
         }),
         Err(e) => Err(said(&e)),
+    })
+}
+
+/// A playlist or album started the way Sonora's own Play starts it: the queue replaced by the
+/// list, which stays its context, so shuffle mixes that list and nothing else (Sir, 2026-11-27:
+/// "it shouldn't put playlists in the queue but actually play them"). Sonora's remote control
+/// has no such order: with nothing queued its play does just that; otherwise Sonora is handed
+/// the list's link, which opens the list's page, and row `row` is started there with its keys.
+/// Some: Sonora took it (with what plays, once its queue confirms it); None: the list did not
+/// start that way.
+async fn start_list(list: &LibraryItem, row: usize, song: Option<&str>, fresh: bool) -> Option<Option<String>> {
+    use crate::sonora::{playback, Item, QUICK};
+    let link = crate::sonora::link_of(&list.uri)?;
+    let current = pipe(playback("current-track"), QUICK).await.ok()?;
+    if row == 0 && current["current"].is_null() {
+        queue_on_sonora("play", &[Item::Link(link)], fresh).await.ok()?;
+        return Some(sonora_now(song).await);
+    }
+    if row == 0 && playing_as_list(list, None).await.is_some() {
+        if current["current"]["state"] != "playing" {
+            pipe(playback("play"), QUICK).await.ok()?;
+        }
+        return Some(crate::sonora::describe_current(&current));
+    }
+    if row > MAX_PLAYLIST_SKIPS {
+        return None;
+    }
+    launch_sonora(vec![link]).await.ok()?;
+    // The page loads its list from the provider first; a second try catches a slow one.
+    for _ in 0..2 {
+        tokio::time::sleep(Duration::from_millis(if fresh { 4000 } else { 1800 })).await;
+        activate_player_selection("sonora", None, row + 1).await.ok()?;
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(350)).await;
+            if let Some(now) = playing_as_list(list, song).await {
+                return Some(crate::sonora::describe_current(&now));
+            }
+        }
+    }
+    None
+}
+
+/// Sonora's `current-track` when it plays `list` as that list (its context, not songs of it
+/// queued by hand), on `song` when one was asked for.
+async fn playing_as_list(list: &LibraryItem, song: Option<&str>) -> Option<Value> {
+    let now = pipe(crate::sonora::playback("current-track"), crate::sonora::QUICK).await.ok()?;
+    if !plays_as_list(&now, list, song) {
+        return None;
+    }
+    let queue = pipe(crate::sonora::queue_snapshot(), crate::sonora::QUICK).await.ok()?;
+    (queue["queue"]["current"]["kind"] == "context").then_some(now)
+}
+
+/// Whether a `current-track` answer plays from `list` (a playlist or album: its kind, and its id
+/// or its name) and, when one was asked for, the song `song`.
+fn plays_as_list(now: &Value, list: &LibraryItem, song: Option<&str>) -> bool {
+    let (current, origin) = (&now["current"], &now["current"]["origin"]);
+    let kind = if list.kind == ItemKind::Album { "album" } else { "playlist" };
+    let id = list.uri.rsplit([':', '/', '=']).next().unwrap_or_default();
+    // (By its id either way round: YouTube Music calls a playlist "VL" and its list's id.)
+    let same_id = |o: &str| o.len().min(id.len()) >= 6 && (o.contains(id) || id.contains(o));
+    origin["kind"] == kind
+        && (origin["id"].as_str().is_some_and(same_id) || origin["name"].as_str().is_some_and(|n| name_score(n, &list.name) >= 0.85))
+        && song.is_none_or(|s| name_score(s, current["track"]["title"].as_str().unwrap_or("")) >= 0.85)
+}
+
+/// The best hit of a Sonora search answer (`{"hits": […]}`) as a list of `kind` (playlist or
+/// album) with its link.
+fn found_list(found: &Value, kind: &str) -> Option<LibraryItem> {
+    let hit = found["hits"].get(0)?;
+    Some(LibraryItem {
+        kind: if kind == "album" { ItemKind::Album } else { ItemKind::Playlist },
+        name: hit["title"].as_str()?.to_string(),
+        uri: hit["link"].as_str().filter(|l| l.starts_with("https://"))?.to_string(),
+        artist: hit["by"].as_str().unwrap_or("").to_string(),
+        source: "Sonora search",
     })
 }
 
@@ -1608,7 +1692,8 @@ async fn play_sonora(item: &LibraryItem, members: &[LibraryItem]) -> Result<Stri
     // Sonora's remote control first: at once, with no window touched and nothing typed. (What
     // follows is for a Sonora too old to have one.)
     let song = matches!(item.kind, ItemKind::Track | ItemKind::LocalFile);
-    if let Some(done) = play_on_sonora(&sonora_items(item, members), &format!("the {} '{}'", item.kind.label(), item.name), song.then_some(item.name.as_str())).await {
+    let list = matches!(item.kind, ItemKind::Playlist | ItemKind::Album).then_some((item, 0));
+    if let Some(done) = play_on_sonora(&sonora_items(item, members), &format!("the {} '{}'", item.kind.label(), item.name), song.then_some(item.name.as_str()), list).await {
         return done;
     }
     let before = session_of("sonora").await;
@@ -1624,7 +1709,7 @@ async fn play_sonora(item: &LibraryItem, members: &[LibraryItem]) -> Result<Stri
                 return Ok(sonora_played(item, "", &now));
             }
             if attempt == 7 && !matches!(item.kind, ItemKind::LocalFile | ItemKind::LocalPlaylist) {
-                activate_player_selection("sonora", None, true).await?;
+                activate_player_selection("sonora", None, 1).await?;
             }
         }
         return Err(format!("Sonora opened '{}' but did not report matching playback. Sign in to its music provider or select the matching result in Sonora.", item.name));
@@ -1662,8 +1747,8 @@ async fn play_sonora(item: &LibraryItem, members: &[LibraryItem]) -> Result<Stri
     }
     // 3. Sonora's search, typed into its own window.
     let query = if item.artist.is_empty() { item.name.clone() } else { format!("{} {}", item.name, item.artist.split(',').next().unwrap_or("").trim()) };
-    for first_result in [true, false] {
-        activate_player_selection("sonora", Some(&query), first_result).await?;
+    for downs in [1, 0] {
+        activate_player_selection("sonora", Some(&query), downs).await?;
         if let Some(now) = sonora_confirms(item, members, None, 10).await {
             return Ok(sonora_played(item, " (through its search)", &now));
         }
@@ -1681,10 +1766,10 @@ async fn play_sonora_in_playlist(track: &LibraryItem, list: &LibraryItem, index:
     // fetched refuses the whole order, so then the entry alone.
     let what = format!("'{}'", track.name);
     let following: Vec<_> = members[index..].iter().take(31).flat_map(|m| sonora_items(m, &[])).collect();
-    match play_on_sonora(&following, &what, Some(&track.name)).await {
+    match play_on_sonora(&following, &what, Some(&track.name), Some((list, index))).await {
         Some(Ok(done)) => return Ok(done),
         Some(Err(_)) => {
-            if let Some(done) = play_on_sonora(&sonora_items(track, &[]), &what, Some(&track.name)).await {
+            if let Some(done) = play_on_sonora(&sonora_items(track, &[]), &what, Some(&track.name), None).await {
                 return done;
             }
         }
@@ -1741,8 +1826,16 @@ fn playback_matches(item: &LibraryItem, members: &[LibraryItem], before: Option<
 async fn search_and_play(query: &str, expected_title: &str, kind: &'static str, player: &str) -> Result<String, String> {
     // Sonora's own search through its remote control: its best hit of that kind plays.
     if player == "sonora" {
-        let search = [crate::sonora::Item::Search { text: query.to_string(), kind }];
-        if let Some(done) = play_on_sonora(&search, &format!("'{expected_title}'"), (kind == "song").then_some(expected_title)).await {
+        // A playlist or album found is started as that list, like one of the library.
+        let hit = match kind {
+            "playlist" | "album" => pipe(crate::sonora::search(query, kind, 1), crate::sonora::FETCH).await.ok().and_then(|found| found_list(&found, kind)),
+            _ => None,
+        };
+        let items = match &hit {
+            Some(list) => vec![crate::sonora::Item::Link(list.uri.clone())],
+            None => vec![crate::sonora::Item::Search { text: query.to_string(), kind }],
+        };
+        if let Some(done) = play_on_sonora(&items, &format!("'{expected_title}'"), (kind == "song").then_some(expected_title), hit.as_ref().map(|list| (list, 0))).await {
             return done;
         }
     }
@@ -1758,8 +1851,8 @@ async fn search_and_play(query: &str, expected_title: &str, kind: &'static str, 
     if player == "sonora" {
         launch_sonora(Vec::new()).await?;
         // The first result row, then (some result lists need it) Enter on the search itself.
-        for first_result in [true, false] {
-            activate_player_selection("sonora", Some(query), first_result).await?;
+        for downs in [1, 0] {
+            activate_player_selection("sonora", Some(query), downs).await?;
             if let Some(now) = confirmed().await {
                 return Ok(format!("Playing '{}' on {} — {}.", now.title, player_name(player), now.describe()));
             }
@@ -1768,7 +1861,7 @@ async fn search_and_play(query: &str, expected_title: &str, kind: &'static str, 
         ensure_spotify_ready().await?;
         open_uri(&format!("spotify:search:{}", urlencoding::encode(query))).await?;
         tokio::time::sleep(Duration::from_millis(1200)).await;
-        activate_player_selection("spotify", None, false).await?;
+        activate_player_selection("spotify", None, 0).await?;
         if let Some(now) = confirmed().await {
             return Ok(format!("Playing '{}' on {} — {}.", now.title, player_name(player), now.describe()));
         }
@@ -1777,11 +1870,13 @@ async fn search_and_play(query: &str, expected_title: &str, kind: &'static str, 
 }
 
 /// Focuses the player's window and starts a selection there. With `search`: Sonora's global
-/// search (Ctrl+Shift+F), the query typed as Unicode, then the first result (`first_result`:
-/// Down + Enter) or the search's own default action (Enter, then Down + Enter). Every key is
-/// sent only while the player is still the foreground window.
+/// search (Ctrl+Shift+F), the query typed as Unicode, then the first result (`downs` 1: Down +
+/// Enter) or the search's own default action (0: Enter, then Down + Enter). Without, on Sonora:
+/// row `downs` of the page in view (Escape twice leaves a search or a selection, then Down
+/// `downs` times, Enter). Every key is sent only while the player is still the foreground
+/// window; the window in front before gets the focus back.
 #[cfg(windows)]
-async fn activate_player_selection(player: &str, search: Option<&str>, first_result: bool) -> Result<(), String> {
+async fn activate_player_selection(player: &str, search: Option<&str>, downs: usize) -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
     if crate::platform::hands_off() {
         return Err(HANDS_OFF.into());
@@ -1797,6 +1892,8 @@ async fn activate_player_selection(player: &str, search: Option<&str>, first_res
         tokio::time::sleep(Duration::from_millis(300)).await;
     };
     crate::win32::call(move || -> Result<(), String> {
+        // SAFETY: a plain query of the foreground window.
+        let before = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }.0;
         crate::win32::focus(hwnd);
         std::thread::sleep(Duration::from_millis(200));
         let focused = || if crate::win32::is_foreground(hwnd) { Ok(()) } else { Err("Music automation stopped because another window took focus.".to_string()) };
@@ -1819,22 +1916,31 @@ async fn activate_player_selection(player: &str, search: Option<&str>, first_res
             }
             std::thread::sleep(Duration::from_millis(1500));
             focused()?;
-            if !first_result {
+            if downs == 0 {
                 crate::win32::send_chord(&[], VK_RETURN)?;
                 std::thread::sleep(Duration::from_millis(900));
                 focused()?;
             }
             crate::win32::send_chord(&[], VK_DOWN)?;
-        } else if player == "sonora" && first_result {
-            crate::win32::send_chord(&[], VK_DOWN)?;
+        } else if player == "sonora" {
+            for key in [VK_ESCAPE, VK_ESCAPE].into_iter().chain(std::iter::repeat_n(VK_DOWN, downs)) {
+                focused()?;
+                crate::win32::send_chord(&[], key)?;
+                std::thread::sleep(Duration::from_millis(60));
+            }
         }
         focused()?;
-        crate::win32::send_chord(&[], VK_RETURN)
+        crate::win32::send_chord(&[], VK_RETURN)?;
+        if before != 0 && before != hwnd {
+            std::thread::sleep(Duration::from_millis(300));
+            crate::win32::focus(before);
+        }
+        Ok(())
     }).await?
 }
 
 #[cfg(not(windows))]
-async fn activate_player_selection(player: &str, search: Option<&str>, first_result: bool) -> Result<(), String> {
+async fn activate_player_selection(player: &str, search: Option<&str>, downs: usize) -> Result<(), String> {
     if crate::platform::hands_off() {
         return Err(HANDS_OFF.into());
     }
@@ -1850,6 +1956,7 @@ async fn activate_player_selection(player: &str, search: Option<&str>, first_res
         if std::time::Instant::now() >= deadline { return Err(format!("{} has no controllable window.", player_name(player))); }
         tokio::time::sleep(Duration::from_millis(300)).await;
     };
+    let before = crate::kde::blocking(crate::plasma::active).await?;
     let w = window.clone();
     crate::kde::blocking(move || crate::winctl::to_front(&w)).await??;
     // The same keys as on Windows, each sent only while the player still has the focus.
@@ -1867,12 +1974,18 @@ async fn activate_player_selection(player: &str, search: Option<&str>, first_res
         press("Ctrl+A", 0).await??;
         crate::kit_typing::type_out(query.chars().take(240).collect()).await?;
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        if !first_result { press("Enter", 900).await??; }
+        if downs == 0 { press("Enter", 900).await??; }
         press("Down", 0).await??;
-    } else if player == "sonora" && first_result {
-        press("Down", 0).await??;
+    } else if player == "sonora" {
+        for key in ["Escape", "Escape"].into_iter().chain(std::iter::repeat_n("Down", downs)) {
+            press(key, 60).await??;
+        }
     }
-    press("Enter", 0).await?
+    press("Enter", 300).await??;
+    if let Some(b) = before.filter(|b| b.uuid != window.uuid) {
+        let _ = crate::kde::blocking(move || crate::plasma::set_state(&b.uuid, crate::plasma::state::ACTIVE, true)).await;
+    }
+    Ok(())
 }
 
 /// Spotify running with its main window up ("Spotify Premium" / "Spotify Free" or a song):
@@ -2401,18 +2514,6 @@ mod tests {
                   {"id":"2zYzyRzz6pRmhPzyfMEC8s","name":"Highway to Hell","artists":"AC/DC","album_id":"10v912xgTZbjAtYfyKWJCS","track_number":1},
                   {"id":"08mG3Y1vljYA6bvDt4Wqkj","name":"Back In Black","artists":"AC/DC"}]}"#;
 
-    /// Repro 2026-11-22 (Sir's screenshot): a started playlist put its owner's account id on
-    /// the media card as the artist. Now the song playing in it shows.
-    #[test]
-    fn a_playlists_card_shows_the_song_not_its_owner() {
-        let list = LibraryItem { kind: ItemKind::Playlist, name: "Chill".into(), uri: "spotify:playlist:x".into(), artist: "abc123ownerid".into(), source: "Sonora library" };
-        let said = "Playing the playlist 'Chill' on Sonora. Now playing: Virtual Insanity by Jamiroquai (playing, 0:00 of 3:47, liked).";
-        assert_eq!(card_of(&list, said), ("Virtual Insanity".to_string(), "Jamiroquai".to_string(), Some("Chill")));
-        assert_eq!(card_of(&list, "Sonora took the playlist; it is starting."), ("Chill".to_string(), String::new(), None), "no owner as artist");
-        let song = LibraryItem { kind: ItemKind::Track, name: "Urgent".into(), uri: "spotify:track:y".into(), artist: "Foreigner".into(), source: "Sonora library" };
-        assert_eq!(card_of(&song, said), ("Urgent".to_string(), "Foreigner".to_string(), None));
-    }
-
     #[test]
     fn sonora_downloaded_playlists_keep_their_order() {
         let (name, tracks) = downloaded_playlist(JAYS_ROCK).unwrap();
@@ -2493,6 +2594,66 @@ mod tests {
         assert!(playback_matches(&track, &[], None, &now));
         now.playing = false;
         assert!(!playback_matches(&track, &[], None, &now));
+    }
+
+    /// Every provider Sonora keeps a library of is read, each item as the link its provider takes
+    /// (Sir, 2026-11-27: "regardless of what you have connected to Sonora"). Before, only
+    /// `spotify/…` was read, so a YouTube Music or Deezer library was invisible to JAI.
+    #[test]
+    fn every_providers_library_is_read_from_sonora() {
+        let dir = std::env::temp_dir().join(format!("jai_sonora_library_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("state.sqlite");
+        let _ = std::fs::remove_file(&db);
+        {
+            let c = Connection::open(&db).unwrap();
+            c.execute_batch("CREATE TABLE snapshots (key TEXT PRIMARY KEY, value TEXT);").unwrap();
+            for (key, value) in [
+                ("spotify/playlists", r#"{"rows":[{"id":"ExamplePlaylistId00000","name":"Jays Rock","owner":"Max Mustermann"}]}"#),
+                ("youtube/playlists", r#"{"rows":[{"id":"PLexample_list-1","name":"Focus Mix","owner":"Max Mustermann"}]}"#),
+                ("youtube/albums", r#"{"rows":[{"id":"MPREb_example","name":"Example Album","artists":["Example Band"]}]}"#),
+                ("deezer/songs", r#"{"rows":[{"id":"12345","name":"Example Song","artists":["Example Band"]}]}"#),
+                ("subsonic/playlists", r#"{"rows":[{"id":"abc","name":"Server List"}]}"#),
+                ("youtube/settings", r#"{"rows":[{"id":"x","name":"Not Music"}]}"#),
+            ] {
+                c.execute("INSERT INTO snapshots VALUES (?1, ?2)", params![key, value]).unwrap();
+            }
+        }
+        let items = read_sonora(&db);
+        let found = |name: &str| items.iter().find(|i| i.name == name).map(|i| (i.kind, i.uri.clone()));
+        assert_eq!(found("Jays Rock"), Some((ItemKind::Playlist, "spotify:playlist:ExamplePlaylistId00000".into())));
+        assert_eq!(found("Focus Mix"), Some((ItemKind::Playlist, "https://music.youtube.com/playlist?list=PLexample_list-1".into())));
+        assert_eq!(found("Example Album"), Some((ItemKind::Album, "https://music.youtube.com/browse/MPREb_example".into())));
+        assert_eq!(found("Example Song"), Some((ItemKind::Track, "https://www.deezer.com/track/12345".into())));
+        assert_eq!(items.len(), 4, "a provider without links and a snapshot that is no library stay out");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A list counts as started like Sonora's Play only from its own origin (its id, else its
+    /// name), and a song in it only on that song.
+    #[test]
+    fn a_list_plays_as_itself_only_from_its_own_origin() {
+        let mut list = item(ItemKind::Playlist, "Jays Focus", "");
+        list.uri = "spotify:playlist:ExamplePlaylistId00000".into();
+        let now = |kind: &str, id: &str, name: &str, title: &str| json!({ "current": { "state": "playing", "track": { "title": title }, "origin": { "kind": kind, "id": id, "name": name } } });
+        assert!(plays_as_list(&now("playlist", "ExamplePlaylistId00000", "", "Highway to Hell"), &list, None));
+        assert!(plays_as_list(&now("playlist", "elsewhere", "Jays Focus", "Highway to Hell"), &list, None), "by its name");
+        assert!(!plays_as_list(&now("album", "ExamplePlaylistId00000", "", "Highway to Hell"), &list, None), "an album is no playlist");
+        assert!(!plays_as_list(&now("playlist", "Another00000", "Road Trip", "Highway to Hell"), &list, None));
+        assert!(plays_as_list(&now("playlist", "ExamplePlaylistId00000", "", "Highway to Hell"), &list, Some("highway to hell")));
+        assert!(!plays_as_list(&now("playlist", "ExamplePlaylistId00000", "", "Back in Black"), &list, Some("Highway to Hell")), "the wrong row");
+        assert!(!plays_as_list(&json!({ "current": null }), &list, None));
+        let mut youtube = item(ItemKind::Playlist, "Focus Mix", "");
+        youtube.uri = "https://music.youtube.com/playlist?list=PLexample_list-1".into();
+        assert!(plays_as_list(&now("playlist", "PLexample_list-1", "", "Anything"), &youtube, None), "another provider's list by the id in its link");
+        assert!(plays_as_list(&now("playlist", "VLPLexample_list-1", "", "Anything"), &youtube, None), "YouTube Music's own id for it");
+        assert!(!plays_as_list(&now("playlist", "PL", "", "Anything"), &youtube, None), "a scrap of an id is no match");
+        // A list found by Sonora's search is started the same way.
+        let hits = json!({ "hits": [{ "kind": "playlist", "title": "Lofi Beats", "by": "Max Mustermann", "duration": null, "link": "https://open.spotify.com/playlist/ExamplePlaylistId00000" }] });
+        let found = found_list(&hits, "playlist").unwrap();
+        assert_eq!((found.kind, found.name.as_str()), (ItemKind::Playlist, "Lofi Beats"));
+        assert!(plays_as_list(&now("playlist", "ExamplePlaylistId00000", "", "Anything"), &found, None));
+        assert!(found_list(&json!({ "hits": [] }), "playlist").is_none());
     }
 
     #[test]

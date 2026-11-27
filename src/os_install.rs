@@ -583,6 +583,9 @@ pub fn room<'a>(disks: &'a [Disk], target: &Target) -> Result<(&'a Disk, u64, u6
     ground(disks, target).map(|g| (g.disk, g.from, g.to))
 }
 
+/// NVIDIA's open driver for CachyOS's kernel, when no NVIDIA package is there after `chwd -a`.
+const NVIDIA_DRIVER: &str = "pacman -Qq | grep -q '^nvidia' || pacman -S --noconfirm --needed linux-cachyos-nvidia-open nvidia-utils";
+
 /// The packages of the new system (`os/packages/target.txt`).
 pub fn packages() -> Vec<&'static str> {
     include_str!("../os/packages/target.txt").lines().map(|l| l.split('#').next().unwrap_or("").trim()).filter(|l| !l.is_empty()).collect()
@@ -699,8 +702,13 @@ pub fn plan(disks: &[Disk], c: &Choices, m: &Machine) -> Result<Plan, Said> {
             inside(&["passwd", "--lock", "root"]),
             Action::Write { path: format!("{ROOT}/etc/sudoers.d/10-wheel"), text: "%wheel ALL=(ALL:ALL) ALL\n".into(), mode: 0o440 },
             inside(&["chwd", "-a"]).soft(),
-            inside(&["pacman", "-S", "--noconfirm", "--needed", match m.card { Some("nvidia") => "ollama-cuda", Some("amd") => "ollama-rocm", _ => "ollama-vulkan" }]).soft(),
-        ],
+        ]
+        .into_iter()
+        // (chwd may give an NVIDIA card nothing in the chroot; without its driver KWin draws on
+        // the CPU and everything lags. Then NVIDIA's open driver: every card's since 2018.)
+        .chain((m.card == Some("nvidia")).then(|| inside(&["sh", "-c", NVIDIA_DRIVER]).soft()))
+        .chain([inside(&["pacman", "-S", "--noconfirm", "--needed", match m.card { Some("nvidia") => "ollama-cuda", Some("amd") => "ollama-rocm", _ => "ollama-vulkan" }]).soft()])
+        .collect(),
     );
 
     // Limine. Its kernels' entries are limine-entry-tool's (CachyOS's limine-mkinitcpio-hook):
@@ -1001,6 +1009,13 @@ mod tests {
         let addon = |card| super::plan(&disks(SAMPLE), &choices(free()), &Machine { card, ..machine() }).unwrap().shown().into_iter().find(|l| l.contains("--needed ollama")).unwrap();
         assert_eq!(addon(Some("nvidia")), format!("arch-chroot {ROOT} pacman -S --noconfirm --needed ollama-cuda"));
         assert!(addon(Some("amd")).ends_with(" ollama-rocm") && addon(Some("intel")).ends_with(" ollama-vulkan") && addon(None).ends_with(" ollama-vulkan"));
+        // An NVIDIA card chwd gave no driver gets NVIDIA's open one (without it KWin draws on the
+        // CPU: Sir, 2026-11-27, "laggy and slow"); other cards are chwd's alone.
+        let shown = |card| super::plan(&disks(SAMPLE), &choices(free()), &Machine { card, ..machine() }).unwrap().shown();
+        let nvidia = shown(Some("nvidia"));
+        let (chwd, driver) = (nvidia.iter().position(|l| l.ends_with("chwd -a")).unwrap(), nvidia.iter().position(|l| l.ends_with("linux-cachyos-nvidia-open nvidia-utils")).unwrap());
+        assert!(chwd < driver && nvidia[driver].contains("grep -q '^nvidia' ||"), "{}", nvidia[driver]);
+        assert!(!shown(Some("amd")).iter().any(|l| l.contains("nvidia")));
         // The list: one name a line, each once, what the owner asked for among them.
         let packages = packages();
         // (Ollama, Tesseract and yt-dlp too: J.A.I.'s package leaves them optional for the stick.)

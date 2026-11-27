@@ -128,6 +128,7 @@ impl Snapshot {
 
     /// Tessellates a frame's shapes and fills the triangles into a canvas of this size (in
     /// physical pixels: points times `pixels_per_point`).
+    // shortcut: one thread fills the whole canvas; split its rows across threads if J.A.I.OS's shell is still slow on a laptop.
     pub fn rasterise(&self, shapes: Vec<epaint::ClippedShape>, pixels_per_point: f32) -> Canvas {
         let primitives = self.ctx.tessellate(shapes, pixels_per_point);
         let ppp = pixels_per_point;
@@ -164,8 +165,11 @@ impl Canvas {
             let min_y = v.iter().map(|p| p.pos.y).fold(f32::MAX, f32::min).max(clip.top()).floor() as i32;
             let max_y = v.iter().map(|p| p.pos.y).fold(f32::MIN, f32::max).min(clip.bottom()).ceil() as i32;
             let colours = [unit(v[0].color), unit(v[1].color), unit(v[2].color)];
+            // (A shape of one colour takes the atlas's white texel at all three corners: it is
+            // sampled once, not at every pixel.)
+            let flat = texture.filter(|_| v[0].uv == v[1].uv && v[1].uv == v[2].uv).map(|t| t.sample(v[0].uv.x, v[0].uv.y));
             for y in min_y.max(0)..max_y.min(self.height as i32) {
-                for x in min_x.max(0)..max_x.min(self.width as i32) {
+                for x in Self::span(&v, area, y as f32 + 0.5007, min_x.max(0), max_x.min(self.width as i32)) {
                     // (Sampled a hair off the pixel's centre and without slack: a pixel on the edge
                     // two triangles share is then covered once. Covered twice, light that adds
                     // up shows every such edge as a bright seam.)
@@ -173,9 +177,7 @@ impl Canvas {
                     if px < clip.left() || px > clip.right() || py < clip.top() || py > clip.bottom() {
                         continue;
                     }
-                    let w0 = ((v[1].pos.x - px) * (v[2].pos.y - py) - (v[2].pos.x - px) * (v[1].pos.y - py)) / area;
-                    let w1 = ((v[2].pos.x - px) * (v[0].pos.y - py) - (v[0].pos.x - px) * (v[2].pos.y - py)) / area;
-                    let w2 = 1.0 - w0 - w1;
+                    let [w0, w1, w2] = Self::weights(&v, area, px, py);
                     if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                         continue;
                     }
@@ -183,10 +185,7 @@ impl Canvas {
                     for (c, s) in src.iter_mut().enumerate() {
                         *s = colours[0][c] * w0 + colours[1][c] * w1 + colours[2][c] * w2;
                     }
-                    if let Some(t) = texture {
-                        let u = v[0].uv.x * w0 + v[1].uv.x * w1 + v[2].uv.x * w2;
-                        let vv = v[0].uv.y * w0 + v[1].uv.y * w1 + v[2].uv.y * w2;
-                        let tex = t.sample(u, vv);
+                    if let Some(tex) = flat.or_else(|| texture.map(|t| t.sample(v[0].uv.x * w0 + v[1].uv.x * w1 + v[2].uv.x * w2, v[0].uv.y * w0 + v[1].uv.y * w1 + v[2].uv.y * w2))) {
                         for c in 0..4 {
                             src[c] *= tex[c];
                         }
@@ -198,6 +197,34 @@ impl Canvas {
                 }
             }
         }
+    }
+
+    /// The weights of the triangle's three corners at a sample point (all ≥ 0 inside it).
+    fn weights(v: &[&epaint::Vertex; 3], area: f32, px: f32, py: f32) -> [f32; 3] {
+        let w0 = ((v[1].pos.x - px) * (v[2].pos.y - py) - (v[2].pos.x - px) * (v[1].pos.y - py)) / area;
+        let w1 = ((v[2].pos.x - px) * (v[0].pos.y - py) - (v[0].pos.x - px) * (v[2].pos.y - py)) / area;
+        [w0, w1, 1.0 - w0 - w1]
+    }
+
+    /// The pixels of the row sampled at `py` that may lie in the triangle: `from..to` cut to where
+    /// each of its weights can be positive, two pixels to spare for rounding (the test of each
+    /// pixel still decides). A thin diagonal triangle's box is mostly empty, and J.A.I.OS's shell
+    /// draws every picture this way.
+    fn span(v: &[&epaint::Vertex; 3], area: f32, py: f32, from: i32, to: i32) -> std::ops::Range<i32> {
+        let (mut lo, mut hi) = (f64::from(from), f64::from(to));
+        let (sign, py) = (f64::from(area.signum()), f64::from(py));
+        for (a, b) in [(1, 2), (2, 0), (0, 1)] {
+            let ([ax, ay], [bx, by]) = ([v[a].pos.x, v[a].pos.y].map(f64::from), [v[b].pos.x, v[b].pos.y].map(f64::from));
+            // (The weight opposite the edge a→b, times the area, is k·px + c along the row.)
+            let (k, c) = ((ay - by) * sign, (ax * (by - py) - bx * (ay - py)) * sign);
+            // (An edge less than a pixel high bounds no stretch that its rounding couldn't move.)
+            if k >= 1.0 {
+                lo = lo.max(-c / k - 0.5003);
+            } else if k <= -1.0 {
+                hi = hi.min(-c / k - 0.5003 + 1.0);
+            }
+        }
+        (lo.floor() as i32 - 2).max(from)..(hi.ceil() as i32 + 2).min(to)
     }
 
     pub fn pixel(&self, x: usize, y: usize) -> [u8; 3] {
@@ -262,6 +289,47 @@ mod tests {
 
     fn screen() -> Rect {
         Rect::from_min_size(pos2(0.0, 0.0), vec2(W, H))
+    }
+
+    /// A row's span holds every pixel the triangle covers (big, small and long thin triangles,
+    /// both windings, up to a 5K screen), and a thin diagonal one is visited in a sliver of its box.
+    #[test]
+    fn a_rows_span_holds_every_pixel_the_triangle_covers() {
+        let mut seed = 12345u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let corner = |x: f32, y: f32| epaint::Vertex { pos: pos2(x, y), uv: pos2(0.0, 0.0), color: Color32::WHITE };
+        let mut triangles: Vec<[epaint::Vertex; 3]> = vec![[corner(10.0, 10.0), corner(1810.0, 1210.0), corner(1811.5, 1209.0)], [corner(0.0, 0.0), corner(5120.0, 2880.0), corner(0.0, 2880.0)], [corner(3.0, 500.0), corner(5000.0, 503.5), corner(2400.0, 502.0)]];
+        for n in 0..1500 {
+            let reach = if n % 100 == 0 { 3000.0 } else { [3.0, 80.0, 600.0][n % 3] };
+            let (x, y) = (next() * 5120.0, next() * 2880.0);
+            triangles.push([(); 3].map(|_| corner(x + (next() - 0.5) * reach, y + (next() - 0.5) * reach)));
+        }
+        let (mut visited, mut boxed) = (0usize, 0usize);
+        for (n, t) in triangles.iter().enumerate() {
+            let v = [&t[0], &t[1], &t[2]];
+            let area = (v[1].pos.x - v[0].pos.x) * (v[2].pos.y - v[0].pos.y) - (v[2].pos.x - v[0].pos.x) * (v[1].pos.y - v[0].pos.y);
+            if area.abs() < 1e-6 {
+                continue;
+            }
+            let (min_x, max_x) = (v.iter().map(|p| p.pos.x).fold(f32::MAX, f32::min).floor() as i32, v.iter().map(|p| p.pos.x).fold(f32::MIN, f32::max).ceil() as i32);
+            let (min_y, max_y) = (v.iter().map(|p| p.pos.y).fold(f32::MAX, f32::min).floor() as i32, v.iter().map(|p| p.pos.y).fold(f32::MIN, f32::max).ceil() as i32);
+            for y in min_y..max_y {
+                let py = y as f32 + 0.5007;
+                let span = Canvas::span(&v, area, py, min_x, max_x);
+                for x in min_x..max_x {
+                    if Canvas::weights(&v, area, x as f32 + 0.5003, py).iter().all(|w| *w >= 0.0) {
+                        assert!(span.contains(&x), "triangle {n} {:?}: pixel {x},{y} covered, outside {span:?}", [t[0].pos, t[1].pos, t[2].pos]);
+                    }
+                }
+                if n == 0 {
+                    (visited, boxed) = (visited + span.len(), boxed + (max_x - min_x) as usize);
+                }
+            }
+        }
+        assert!(visited * 20 < boxed, "the thin diagonal: {visited} of its box's {boxed} pixels visited");
     }
 
     /// The emblem in each state, on the obsidian canvas.

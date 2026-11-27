@@ -977,6 +977,39 @@ mod tests {
         assert_eq!(selected, None);
     }
 
+    /// Probe: what one frame of each surface costs on the CPU (egui's frame, then the raster).
+    /// Sir's PC, 2026-11-27, a frame and its raster: the complex core 9 + 40 ms, the desktop
+    /// 10 + 178 ms, every pixel sampling the atlas's white; sampled once a shape and with each
+    /// row's span, 5 + 23 and 4 + 38 ms.
+    #[test]
+    #[ignore]
+    fn os_shell_frame_costs_probe() {
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(2560.0, 1440.0));
+        for style in [crate::holo_core::CoreStyle::Simple, crate::holo_core::CoreStyle::Complex] {
+            let mut core = crate::holo_core::Core::new(crate::holo_core::Pose::Front);
+            core.style = style;
+            core.set_mood(crate::holo_core::Mood::Speaking);
+            let mut stage = Stage::new(core_rect(screen).size());
+            for k in 0..30 {
+                core.step(1.0 / 15.0, &crate::holo_core::Feed { voice: 0.55, day_secs: 50_000.0 + k as f32, ..Default::default() });
+                let t = std::time::Instant::now();
+                let frame = stage.frames(1, &mut |ctx| paint_core(ctx, &core));
+                let made = t.elapsed();
+                let _ = stage.raster(&frame);
+                if k % 10 == 9 {
+                    println!("core {style:?} {}x{}: frame {:?}, raster {:?}", core_rect(screen).width(), core_rect(screen).height(), made, t.elapsed() - made);
+                }
+            }
+        }
+        let icons = icons();
+        let mut stage = Stage::new(screen.size());
+        let t = std::time::Instant::now();
+        let frame = stage.frames(1, &mut |ctx| _ = paint_desktop(ctx, &[], &icons, &mut None));
+        let made = t.elapsed();
+        let _ = stage.raster(&frame);
+        println!("desktop 2560x1440: frame {:?}, raster {:?}", made, t.elapsed() - made);
+    }
+
     #[test]
     fn os_shell_picture_of_a_tray_menu() {
         let _look = crate::holo_theme::look_for_pictures();

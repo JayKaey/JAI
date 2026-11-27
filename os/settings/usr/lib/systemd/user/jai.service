@@ -4,7 +4,10 @@
 [Unit]
 Description=J.A.I.
 PartOf=graphical-session.target
-After=plasma-kwin_wayland.service jai-shell.service
+# His ears and voice go through PipeWire: started before it, the microphone he opens is a sound
+# server that isn't there yet.
+Wants=pipewire.service pipewire-pulse.service wireplumber.service
+After=plasma-kwin_wayland.service jai-shell.service pipewire.service pipewire-pulse.service wireplumber.service
 
 [Service]
 ExecStartPre=/usr/bin/systemd-tmpfiles --user --create /usr/share/user-tmpfiles.d/jaios.conf

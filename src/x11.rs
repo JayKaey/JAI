@@ -285,6 +285,19 @@ pub fn displays() -> Vec<DisplayInfo> {
     list
 }
 
+/// The highest refresh rate (Hz) among the lit monitors (RandR: the mode each CRTC shows).
+pub fn fastest_refresh_hz() -> Option<u32> {
+    let x = x()?;
+    let res = x.conn.randr_get_screen_resources_current(x.root).ok()?.reply().ok()?;
+    res.crtcs
+        .iter()
+        .filter_map(|crtc| x.conn.randr_get_crtc_info(*crtc, res.config_timestamp).ok()?.reply().ok())
+        .filter_map(|crtc| res.modes.iter().find(|m| crtc.mode != 0 && m.id == crtc.mode))
+        .filter(|m| m.htotal > 0 && m.vtotal > 0)
+        .map(|m| (f64::from(m.dot_clock) / (f64::from(m.htotal) * f64::from(m.vtotal))).round() as u32)
+        .max()
+}
+
 /// A monitor's work area: its rect cut by the desktop's (`_NET_WORKAREA`: x, y, w, h), or the
 /// whole of it when they do not meet.
 fn work_of(rect: [i32; 4], area: &[u32]) -> [i32; 4] {
