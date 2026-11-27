@@ -980,7 +980,7 @@ mod tests {
     /// Probe: what one frame of each surface costs on the CPU (egui's frame, then the raster).
     /// Sir's PC, 2026-11-27, a frame and its raster: the complex core 9 + 40 ms, the desktop
     /// 10 + 178 ms, every pixel sampling the atlas's white; sampled once a shape and with each
-    /// row's span, 5 + 23 and 4 + 38 ms.
+    /// row's span, 5 + 23 and 4 + 38 ms; on all of the processor's threads, 5 + 10 and 5 + 25 ms.
     #[test]
     #[ignore]
     fn os_shell_frame_costs_probe() {

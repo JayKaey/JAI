@@ -4,7 +4,7 @@
 //! window. Triangles are filled at pixel centres with interpolated colours and bilinear texture
 //! samples (the font atlas), blended premultiplied in gamma space like egui's own renderer.
 
-use eframe::egui::{self, epaint, pos2, vec2, Color32, Rect, TextureId};
+use eframe::egui::{self, epaint, pos2, Color32, Rect, TextureId};
 use std::collections::HashMap;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -127,78 +127,93 @@ impl Snapshot {
     }
 
     /// Tessellates a frame's shapes and fills the triangles into a canvas of this size (in
-    /// physical pixels: points times `pixels_per_point`).
-    // shortcut: one thread fills the whole canvas; split its rows across threads if J.A.I.OS's shell is still slow on a laptop.
+    /// physical pixels: points times `pixels_per_point`), on all of the processor's threads.
     pub fn rasterise(&self, shapes: Vec<epaint::ClippedShape>, pixels_per_point: f32) -> Canvas {
-        let primitives = self.ctx.tessellate(shapes, pixels_per_point);
-        let ppp = pixels_per_point;
+        self.rasterise_on(shapes, pixels_per_point, std::thread::available_parallelism().map_or(1, |n| n.get()))
+    }
+
+    /// `rasterise` on up to `threads` threads, each filling a band of the rows with every mesh in
+    /// turn: a pixel is blended just as on one thread. (J.A.I.OS's shell draws all it shows this
+    /// way, on the thread that also takes Sir's clicks.)
+    fn rasterise_on(&self, shapes: Vec<epaint::ClippedShape>, ppp: f32, threads: usize) -> Canvas {
+        let primitives = self.ctx.tessellate(shapes, ppp);
         let (w, h) = ((self.size.x * ppp).round() as usize, (self.size.y * ppp).round() as usize);
-        let mut canvas = Canvas { width: w, height: h, pixels: vec![self.clear; w * h] };
-        for p in primitives {
-            if let epaint::Primitive::Mesh(mesh) = &p.primitive {
-                // (epaint hands points; a GPU backend scales them to pixels, so does this.)
-                if ppp == 1.0 {
-                    canvas.fill(mesh, p.clip_rect, self.textures.get(&mesh.texture_id));
-                } else {
+        // (epaint hands points; a GPU backend scales them to pixels, so does this.)
+        let meshes: Vec<(std::borrow::Cow<epaint::Mesh>, Rect)> = primitives
+            .iter()
+            .filter_map(|p| match &p.primitive {
+                epaint::Primitive::Mesh(mesh) if ppp == 1.0 => Some((std::borrow::Cow::Borrowed(mesh), p.clip_rect)),
+                epaint::Primitive::Mesh(mesh) => {
                     let mut mesh = mesh.clone();
                     mesh.vertices.iter_mut().for_each(|v| v.pos = pos2(v.pos.x * ppp, v.pos.y * ppp));
-                    let clip = Rect::from_min_max(pos2(p.clip_rect.min.x * ppp, p.clip_rect.min.y * ppp), pos2(p.clip_rect.max.x * ppp, p.clip_rect.max.y * ppp));
-                    canvas.fill(&mesh, clip, self.textures.get(&mesh.texture_id));
+                    Some((std::borrow::Cow::Owned(mesh), Rect::from_min_max(pos2(p.clip_rect.min.x * ppp, p.clip_rect.min.y * ppp), pos2(p.clip_rect.max.x * ppp, p.clip_rect.max.y * ppp))))
                 }
+                _ => None,
+            })
+            .collect();
+        let mut canvas = Canvas { width: w, height: h, pixels: vec![self.clear; w * h] };
+        // (A band of at least 32 rows: a thread costs more than a few rows.)
+        let rows = h.div_ceil(threads.clamp(1, (h / 32).max(1))).max(1);
+        std::thread::scope(|s| {
+            for (i, band) in canvas.pixels.chunks_mut(rows * w.max(1)).enumerate() {
+                let (meshes, textures) = (&meshes, &self.textures);
+                s.spawn(move || meshes.iter().for_each(|(mesh, clip)| fill(band, w, i * rows, mesh, *clip, textures.get(&mesh.texture_id))));
             }
-        }
+        });
         canvas
     }
 }
 
-impl Canvas {
-    fn fill(&mut self, mesh: &epaint::Mesh, clip: Rect, texture: Option<&Texture>) {
-        let clip = clip.intersect(Rect::from_min_size(pos2(0.0, 0.0), vec2(self.width as f32, self.height as f32)));
-        for tri in mesh.indices.chunks_exact(3) {
-            let v = [&mesh.vertices[tri[0] as usize], &mesh.vertices[tri[1] as usize], &mesh.vertices[tri[2] as usize]];
-            let area = (v[1].pos.x - v[0].pos.x) * (v[2].pos.y - v[0].pos.y) - (v[2].pos.x - v[0].pos.x) * (v[1].pos.y - v[0].pos.y);
-            if area.abs() < 1e-6 {
-                continue;
-            }
-            let min_x = v.iter().map(|p| p.pos.x).fold(f32::MAX, f32::min).max(clip.left()).floor() as i32;
-            let max_x = v.iter().map(|p| p.pos.x).fold(f32::MIN, f32::max).min(clip.right()).ceil() as i32;
-            let min_y = v.iter().map(|p| p.pos.y).fold(f32::MAX, f32::min).max(clip.top()).floor() as i32;
-            let max_y = v.iter().map(|p| p.pos.y).fold(f32::MIN, f32::max).min(clip.bottom()).ceil() as i32;
-            let colours = [unit(v[0].color), unit(v[1].color), unit(v[2].color)];
-            // (A shape of one colour takes the atlas's white texel at all three corners: it is
-            // sampled once, not at every pixel.)
-            let flat = texture.filter(|_| v[0].uv == v[1].uv && v[1].uv == v[2].uv).map(|t| t.sample(v[0].uv.x, v[0].uv.y));
-            for y in min_y.max(0)..max_y.min(self.height as i32) {
-                for x in Self::span(&v, area, y as f32 + 0.5007, min_x.max(0), max_x.min(self.width as i32)) {
-                    // (Sampled a hair off the pixel's centre and without slack: a pixel on the edge
-                    // two triangles share is then covered once. Covered twice, light that adds
-                    // up shows every such edge as a bright seam.)
-                    let (px, py) = (x as f32 + 0.5003, y as f32 + 0.5007);
-                    if px < clip.left() || px > clip.right() || py < clip.top() || py > clip.bottom() {
-                        continue;
-                    }
-                    let [w0, w1, w2] = Self::weights(&v, area, px, py);
-                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
-                        continue;
-                    }
-                    let mut src = [0.0f32; 4];
-                    for (c, s) in src.iter_mut().enumerate() {
-                        *s = colours[0][c] * w0 + colours[1][c] * w1 + colours[2][c] * w2;
-                    }
-                    if let Some(tex) = flat.or_else(|| texture.map(|t| t.sample(v[0].uv.x * w0 + v[1].uv.x * w1 + v[2].uv.x * w2, v[0].uv.y * w0 + v[1].uv.y * w1 + v[2].uv.y * w2))) {
-                        for c in 0..4 {
-                            src[c] *= tex[c];
-                        }
-                    }
-                    let dst = &mut self.pixels[y as usize * self.width + x as usize];
+/// Fills a mesh's triangles into `band`: the canvas's rows from `top` on, `width` pixels each.
+fn fill(band: &mut [[f32; 4]], width: usize, top: usize, mesh: &epaint::Mesh, clip: Rect, texture: Option<&Texture>) {
+    let bottom = top + band.len() / width.max(1);
+    let clip = clip.intersect(Rect::from_min_max(pos2(0.0, top as f32), pos2(width as f32, bottom as f32)));
+    for tri in mesh.indices.chunks_exact(3) {
+        let v = [&mesh.vertices[tri[0] as usize], &mesh.vertices[tri[1] as usize], &mesh.vertices[tri[2] as usize]];
+        let area = (v[1].pos.x - v[0].pos.x) * (v[2].pos.y - v[0].pos.y) - (v[2].pos.x - v[0].pos.x) * (v[1].pos.y - v[0].pos.y);
+        if area.abs() < 1e-6 {
+            continue;
+        }
+        let min_x = v.iter().map(|p| p.pos.x).fold(f32::MAX, f32::min).max(clip.left()).floor() as i32;
+        let max_x = v.iter().map(|p| p.pos.x).fold(f32::MIN, f32::max).min(clip.right()).ceil() as i32;
+        let min_y = v.iter().map(|p| p.pos.y).fold(f32::MAX, f32::min).max(clip.top()).floor() as i32;
+        let max_y = v.iter().map(|p| p.pos.y).fold(f32::MIN, f32::max).min(clip.bottom()).ceil() as i32;
+        let colours = [unit(v[0].color), unit(v[1].color), unit(v[2].color)];
+        // (A shape of one colour takes the atlas's white texel at all three corners: it is
+        // sampled once, not at every pixel.)
+        let flat = texture.filter(|_| v[0].uv == v[1].uv && v[1].uv == v[2].uv).map(|t| t.sample(v[0].uv.x, v[0].uv.y));
+        for y in min_y.max(top as i32)..max_y.min(bottom as i32) {
+            for x in Canvas::span(&v, area, y as f32 + 0.5007, min_x.max(0), max_x.min(width as i32)) {
+                // (Sampled a hair off the pixel's centre and without slack: a pixel on the edge
+                // two triangles share is then covered once. Covered twice, light that adds
+                // up shows every such edge as a bright seam.)
+                let (px, py) = (x as f32 + 0.5003, y as f32 + 0.5007);
+                if px < clip.left() || px > clip.right() || py < clip.top() || py > clip.bottom() {
+                    continue;
+                }
+                let [w0, w1, w2] = Canvas::weights(&v, area, px, py);
+                if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                    continue;
+                }
+                let mut src = [0.0f32; 4];
+                for (c, s) in src.iter_mut().enumerate() {
+                    *s = colours[0][c] * w0 + colours[1][c] * w1 + colours[2][c] * w2;
+                }
+                if let Some(tex) = flat.or_else(|| texture.map(|t| t.sample(v[0].uv.x * w0 + v[1].uv.x * w1 + v[2].uv.x * w2, v[0].uv.y * w0 + v[1].uv.y * w1 + v[2].uv.y * w2))) {
                     for c in 0..4 {
-                        dst[c] = (src[c] + dst[c] * (1.0 - src[3])).clamp(0.0, 1.0);
+                        src[c] *= tex[c];
                     }
+                }
+                let dst = &mut band[(y as usize - top) * width + x as usize];
+                for c in 0..4 {
+                    dst[c] = (src[c] + dst[c] * (1.0 - src[3])).clamp(0.0, 1.0);
                 }
             }
         }
     }
+}
 
+impl Canvas {
     /// The weights of the triangle's three corners at a sample point (all ≥ 0 inside it).
     fn weights(v: &[&epaint::Vertex; 3], area: f32, px: f32, py: f32) -> [f32; 3] {
         let w0 = ((v[1].pos.x - px) * (v[2].pos.y - py) - (v[2].pos.x - px) * (v[1].pos.y - py)) / area;
@@ -280,6 +295,7 @@ impl Canvas {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::egui::vec2;
     use crate::hud_board::{self, BlockKind};
     use crate::holo_core::{Core, Pose};
     use std::time::Instant;
@@ -289,6 +305,33 @@ mod tests {
 
     fn screen() -> Rect {
         Rect::from_min_size(pos2(0.0, 0.0), vec2(W, H))
+    }
+
+    /// Drawn on several threads, a picture is the one a single thread draws, pixel for pixel
+    /// (bands of uneven heights; the core, glow and lettering in it).
+    #[test]
+    fn a_picture_drawn_on_many_threads_is_the_one_drawn_on_one() {
+        let mut emblem = Core::new(Pose::Gyro);
+        for _ in 0..20 {
+            emblem.tick(1.0 / 60.0, 0.4, true);
+        }
+        let mut snap = Snapshot::new(vec2(W, H));
+        let mut last = None;
+        for k in 0..2 {
+            let input = egui::RawInput { screen_rect: Some(snap.screen()), time: Some(k as f64 / 60.0), ..Default::default() };
+            last = Some(snap.frame(input, |ctx| {
+                crate::gui::paint_canvas(ctx);
+                egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
+                    emblem.paint(&ui.painter_at(screen()), screen());
+                    ui.label("J.A.I. 01 // SYSTEMS NOMINAL");
+                });
+            }));
+        }
+        let shapes = last.expect("a frame").shapes;
+        let (one, many) = (snap.rasterise_on(shapes.clone(), 1.0, 1), snap.rasterise_on(shapes, 1.0, 7));
+        assert_eq!((one.width, one.height), (many.width, many.height));
+        assert!(one.brightness(screen()) > 1.0, "something is drawn");
+        assert!(one.pixels == many.pixels, "the bands' picture differs from one thread's");
     }
 
     /// A row's span holds every pixel the triangle covers (big, small and long thin triangles,

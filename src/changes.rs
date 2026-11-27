@@ -103,6 +103,7 @@ pub const RELEASES: &[Release] = &[
             fixed("J.A.I.OS: laptop microphones", "Intel's Smart Sound firmware is installed, which a laptop's built-in microphone needs."),
             better("J.A.I.OS: smooth windows", "On Linux his windows draw together once per refresh instead of each waiting for one in turn."),
             fixed("J.A.I.OS: a quicker desktop", "The desktop draws four times quicker and the core twice as quick, so it answers clicks sooner."),
+            better("J.A.I.OS: drawn on every core", "His desktop and core are drawn by all of the processor's cores together, several times quicker."),
         ],
     },
     Release {
